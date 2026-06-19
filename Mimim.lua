@@ -1,0 +1,1174 @@
+=====================================================================
+-- 🎨 DRAW AI V14.7 ULTIMATE — 3 Mode Quality Filter
+-- 🔥 Fix: Stroke Quality Scoring + 3 Mode Filter (Normal / Balanced / Perfect)
+-- ✅ FULLY FIXED: Preload function added, all bugs resolved
+-- =====================================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local remo = ReplicatedStorage.rbxts_include and ReplicatedStorage.rbxts_include.node_modules
+if remo then remo = remo["@rbxts"] end
+if remo then remo = remo.remo end
+if remo then remo = remo.src end
+if remo then remo = remo.container end
+local sync = remo and remo:FindFirstChild("sync")
+
+-- ========== STATE ==========
+local currentTheme = nil
+local currentScene = nil
+local drawCount = 0
+local testResults = {}
+local isDrawing = false
+local drawingApiActive = false
+local lastThemeProcessed = nil
+local sizeMultiplier = 0.35
+local preloadComplete = false
+local DRAW_DELAY = 0.001
+local autoSizeEnabled = false
+local skipCount = 5 -- ✅ ค่าเริ่มต้น
+
+-- ========== 🎨 3 MODE STATE (V14.7) ==========
+local drawMode = 2 -- ค่าเริ่มต้น: Mode 2 (Balanced)
+local modeNames = {"Normal", "Balanced", "Perfect"}
+local modeColors = {
+    Color3.fromRGB(100, 255, 100),   -- Mode 1: เขียว
+    Color3.fromRGB(255, 200, 50),    -- Mode 2: ส้ม
+    Color3.fromRGB(255, 50, 255)     -- Mode 3: ชมพูม่วง
+}
+
+-- ========== CACHE ==========
+if not getgenv().QuickDrawCache then getgenv().QuickDrawCache = {} end
+if not getgenv().QuickDrawLoading then getgenv().QuickDrawLoading = {} end
+local apiCache = getgenv().QuickDrawCache
+local isLoading = getgenv().QuickDrawLoading
+
+-- ========== THEME MAPPING ==========
+local themeMapping = {
+    ["t-shirt"] = "t-shirt", ["t shirt"] = "t-shirt", ["t_shirt"] = "t-shirt", ["tshirt"] = "t-shirt",
+    ["hot dog"] = "hot dog", ["hotdog"] = "hot dog", ["hot_dog"] = "hot dog",
+    ["traffic light"] = "traffic light", ["traffic_light"] = "traffic light",
+    ["palm tree"] = "palm tree", ["palm_tree"] = "palm tree", ["palmtree"] = "palm tree",
+    ["house plant"] = "house plant", ["house_plant"] = "house plant", ["houseplant"] = "house plant",
+    ["cell phone"] = "cell phone", ["cell_phone"] = "cell phone", ["cellphone"] = "cell phone",
+    ["birthday cake"] = "birthday cake", ["birthday_cake"] = "birthday cake", ["birthdaycake"] = "birthday cake",
+    ["flying saucer"] = "flying saucer", ["flying_saucer"] = "flying saucer", ["flyingsaucer"] = "flying saucer", ["ufo"] = "flying saucer",
+    ["soccer ball"] = "soccer ball", ["soccer_ball"] = "soccer ball", ["soccerball"] = "soccer ball",
+    ["tennis racquet"] = "tennis racquet", ["tennis_racquet"] = "tennis racquet", ["tennisracquet"] = "tennis racquet",
+    ["baseball bat"] = "baseball bat", ["baseball_bat"] = "baseball bat", ["baseballbat"] = "baseball bat",
+    ["aircraft carrier"] = "aircraft carrier", ["aircraft_carrier"] = "aircraft carrier", ["aircraftcarrier"] = "aircraft carrier",
+    ["hot air balloon"] = "hot air balloon", ["hot_air_balloon"] = "hot air balloon", ["hotairballoon"] = "hot air balloon",
+    ["paper clip"] = "paper clip", ["paper_clip"] = "paper clip", ["paperclip"] = "paper clip",
+    ["paint can"] = "paint can", ["paint_can"] = "paint can", ["paintcan"] = "paint can",
+    ["floor lamp"] = "floor lamp", ["floor_lamp"] = "floor lamp", ["floorlamp"] = "floor lamp",
+    ["fire hydrant"] = "fire hydrant", ["fire_hydrant"] = "fire hydrant", ["firehydrant"] = "fire hydrant",
+    ["fire truck"] = "firetruck", ["firetruck"] = "firetruck", ["fire_truck"] = "firetruck",
+    ["wine bottle"] = "wine bottle", ["wine_bottle"] = "wine bottle", ["winebottle"] = "wine bottle",
+    ["wine glass"] = "wine glass", ["wine_glass"] = "wine glass", ["wineglass"] = "wine glass",
+    ["swing set"] = "swing set", ["swing_set"] = "swing set", ["swingset"] = "swing set",
+    ["sleeping bag"] = "sleeping bag", ["sleeping_bag"] = "sleeping bag", ["sleepingbag"] = "sleeping bag",
+    ["smiley face"] = "smiley face", ["smiley_face"] = "smiley face", ["smileyface"] = "smiley face", ["smile"] = "smiley face",
+    ["speed boat"] = "speedboat", ["speedboat"] = "speedboat", ["speed_boat"] = "speedboat",
+    ["power outlet"] = "power outlet", ["power_outlet"] = "power outlet", ["poweroutlet"] = "power outlet", ["outlet"] = "power outlet",
+    ["remote control"] = "remote control", ["remote_control"] = "remote control", ["remotecontrol"] = "remote control", ["remote"] = "remote control",
+    ["roller coaster"] = "roller coaster", ["roller_coaster"] = "roller coaster", ["rollercoaster"] = "roller coaster",
+    ["school bus"] = "school bus", ["school_bus"] = "school bus", ["schoolbus"] = "school bus",
+    ["see saw"] = "see saw", ["see_saw"] = "see saw", ["seesaw"] = "see saw",
+    ["sea turtle"] = "sea turtle", ["sea_turtle"] = "sea turtle", ["seaturtle"] = "sea turtle",
+    ["teddy bear"] = "teddy-bear", ["teddy_bear"] = "teddy-bear", ["teddybear"] = "teddy-bear", ["bear"] = "teddy-bear",
+    ["washing machine"] = "washing machine", ["washing_machine"] = "washing machine", ["washingmachine"] = "washing machine",
+    ["watermelon"] = "watermelon", ["water_melon"] = "watermelon",
+    ["waterslide"] = "waterslide", ["water_slide"] = "waterslide",
+    ["diving board"] = "diving board", ["diving_board"] = "diving board",
+    ["light bulb"] = "light bulb", ["light_bulb"] = "light bulb", ["lightbulb"] = "light bulb",
+    ["alarm clock"] = "alarm clock", ["alarm_clock"] = "alarm clock",
+    ["ceiling fan"] = "ceiling fan", ["ceiling_fan"] = "ceiling fan",
+    ["coffee cup"] = "coffee cup", ["coffee_cup"] = "coffee cup",
+    ["cruise ship"] = "cruise ship", ["cruise_ship"] = "cruise ship",
+    ["donut"] = "donut", ["doughnut"] = "donut",
+    ["drums"] = "drums", ["drum"] = "drums",
+    ["flip flops"] = "flip flops", ["flip_flops"] = "flip flops",
+    ["frying pan"] = "frying pan", ["frying_pan"] = "frying pan",
+    ["garden hose"] = "garden hose", ["garden_hose"] = "garden hose",
+    ["golf club"] = "golf club", ["golf_club"] = "golf club",
+    ["hockey puck"] = "hockey puck", ["hockey_puck"] = "hockey puck",
+    ["hockey stick"] = "hockey stick", ["hockey_stick"] = "hockey stick",
+    ["hot tub"] = "hot tub", ["hot_tub"] = "hot tub",
+    ["ice cream"] = "ice cream", ["ice_cream"] = "ice cream",
+    ["pickup truck"] = "pickup truck", ["pickup_truck"] = "pickup truck",
+    ["picture frame"] = "picture frame", ["picture_frame"] = "picture frame",
+    ["police car"] = "police car", ["police_car"] = "police car",
+    ["stop sign"] = "stop sign", ["stop_sign"] = "stop sign", ["stopsign"] = "stop sign",
+    ["string bean"] = "string bean", ["string_bean"] = "string bean", ["stringbean"] = "string bean",
+    ["The Eiffel Tower"] = "The Eiffel Tower", ["the_eiffel_tower"] = "The Eiffel Tower", ["eiffel_tower"] = "The Eiffel Tower",
+    ["The Great Wall of China"] = "The Great Wall of China", ["the_great_wall_of_china"] = "The Great Wall of China",
+    ["The Mona Lisa"] = "The Mona Lisa", ["the_mona_lisa"] = "The Mona Lisa", ["mona_lisa"] = "The Mona Lisa",
+    ["skateboard"] = "skateboard", ["spreadsheet"] = "spreadsheet", ["stereo"] = "stereo",
+    ["stethoscope"] = "stethoscope", ["toothbrush"] = "toothbrush", ["toothpaste"] = "toothpaste",
+    -- Single words
+    ["ambulance"] = "ambulance", ["angel"] = "angel", ["ant"] = "ant", ["banana"] = "banana",
+    ["barn"] = "barn", ["baseball"] = "baseball", ["basketball"] = "basketball", ["bathtub"] = "bathtub",
+    ["beach"] = "beach", ["bear"] = "bear", ["beard"] = "beard", ["bed"] = "bed", ["bee"] = "bee",
+    ["belt"] = "belt", ["bench"] = "bench", ["bicycle"] = "bicycle", ["binoculars"] = "binoculars",
+    ["bluetooth"] = "bluetooth", ["bottlecap"] = "bottlecap", ["bowtie"] = "bowtie", ["bracelet"] = "bracelet",
+    ["brain"] = "brain", ["bread"] = "bread", ["bridge"] = "bridge", ["broccoli"] = "broccoli",
+    ["broom"] = "broom", ["bucket"] = "bucket", ["bulldozer"] = "bulldozer", ["bus"] = "bus",
+    ["bush"] = "bush", ["butterfly"] = "butterfly", ["cactus"] = "cactus", ["cake"] = "cake",
+    ["calculator"] = "calculator", ["calendar"] = "calendar", ["camel"] = "camel", ["camera"] = "camera",
+    ["campfire"] = "campfire", ["candle"] = "candle", ["cannon"] = "cannon", ["canoe"] = "canoe",
+    ["carrot"] = "carrot", ["castle"] = "castle", ["cat"] = "cat", ["chair"] = "chair",
+    ["chandelier"] = "chandelier", ["church"] = "church", ["circle"] = "circle", ["clarinet"] = "clarinet",
+    ["clock"] = "clock", ["cloud"] = "cloud", ["compass"] = "compass", ["computer"] = "computer",
+    ["cookie"] = "cookie", ["cooler"] = "cooler", ["couch"] = "couch", ["cow"] = "cow",
+    ["crab"] = "crab", ["crayon"] = "crayon", ["crocodile"] = "crocodile", ["crown"] = "crown",
+    ["crow"] = "crow", ["cup"] = "cup", ["diamond"] = "diamond", ["dishwasher"] = "dishwasher",
+    ["dog"] = "dog", ["dolphin"] = "dolphin", ["door"] = "door", ["dragon"] = "dragon",
+    ["dresser"] = "dresser", ["drill"] = "drill", ["duck"] = "duck", ["dumbbell"] = "dumbbell",
+    ["ear"] = "ear", ["elbow"] = "elbow", ["elephant"] = "elephant", ["envelope"] = "envelope",
+    ["eraser"] = "eraser", ["eye"] = "eye", ["eyeglasses"] = "eyeglasses", ["face"] = "face",
+    ["fan"] = "fan", ["feather"] = "feather", ["fence"] = "fence", ["finger"] = "finger",
+    ["fireplace"] = "fireplace", ["fish"] = "fish", ["flamingo"] = "flamingo", ["flashlight"] = "flashlight",
+    ["flower"] = "flower", ["foot"] = "foot", ["fork"] = "fork", ["frog"] = "frog",
+    ["garden"] = "garden", ["giraffe"] = "giraffe", ["goatee"] = "goatee", ["grapes"] = "grapes",
+    ["grass"] = "grass", ["guitar"] = "guitar", ["hamburger"] = "hamburger", ["hammer"] = "hammer",
+    ["hand"] = "hand", ["harp"] = "harp", ["hat"] = "hat", ["headphones"] = "headphones",
+    ["hedgehog"] = "hedgehog", ["helicopter"] = "helicopter", ["helmet"] = "helmet", ["hexagon"] = "hexagon",
+    ["horse"] = "horse", ["hospital"] = "hospital", ["hourglass"] = "hourglass", ["house"] = "house",
+    ["hurricane"] = "hurricane", ["jacket"] = "jacket", ["jail"] = "jail", ["kangaroo"] = "kangaroo",
+    ["key"] = "key", ["keyboard"] = "keyboard", ["knee"] = "knee", ["knife"] = "knife",
+    ["ladder"] = "ladder", ["lantern"] = "lantern", ["laptop"] = "laptop", ["leaf"] = "leaf",
+    ["leg"] = "leg", ["lighter"] = "lighter", ["lighthouse"] = "lighthouse", ["lightning"] = "lightning",
+    ["line"] = "line", ["lion"] = "lion", ["lipstick"] = "lipstick", ["lobster"] = "lobster",
+    ["lollipop"] = "lollipop", ["mailbox"] = "mailbox", ["map"] = "map", ["marker"] = "marker",
+    ["matches"] = "matches", ["megaphone"] = "megaphone", ["mermaid"] = "mermaid", ["microphone"] = "microphone",
+    ["microwave"] = "microwave", ["monkey"] = "monkey", ["moon"] = "moon", ["mosquito"] = "mosquito",
+    ["motorbike"] = "motorbike", ["mountain"] = "mountain", ["mouse"] = "mouse", ["moustache"] = "moustache",
+    ["mouth"] = "mouth", ["mug"] = "mug", ["mushroom"] = "mushroom", ["nail"] = "nail",
+    ["necklace"] = "necklace", ["nose"] = "nose", ["ocean"] = "ocean", ["octagon"] = "octagon",
+    ["octopus"] = "octopus", ["onion"] = "onion", ["oven"] = "oven", ["owl"] = "owl",
+    ["paintbrush"] = "paintbrush", ["panda"] = "panda", ["pants"] = "pants", ["parachute"] = "parachute",
+    ["parrot"] = "parrot", ["passport"] = "passport", ["peanut"] = "peanut", ["pear"] = "pear",
+    ["peas"] = "peas", ["pencil"] = "pencil", ["penguin"] = "penguin", ["piano"] = "piano",
+    ["pig"] = "pig", ["pillow"] = "pillow", ["pineapple"] = "pineapple", ["pizza"] = "pizza",
+    ["pond"] = "pond", ["pool"] = "pool", ["popsicle"] = "popsicle", ["postcard"] = "postcard",
+    ["potato"] = "potato", ["purse"] = "purse", ["rabbit"] = "rabbit", ["radio"] = "radio",
+    ["rain"] = "rain", ["rainbow"] = "rainbow", ["rake"] = "rake", ["rhinoceros"] = "rhinoceros",
+    ["rifle"] = "rifle", ["river"] = "river", ["rollerskates"] = "rollerskates", ["sailboat"] = "sailboat",
+    ["sandwich"] = "sandwich", ["saw"] = "saw", ["saxophone"] = "saxophone", ["scissors"] = "scissors",
+    ["scorpion"] = "scorpion", ["screwdriver"] = "screwdriver", ["shark"] = "shark", ["sheep"] = "sheep",
+    ["shoe"] = "shoe", ["shorts"] = "shorts", ["shovel"] = "shovel", ["sink"] = "sink",
+    ["ski"] = "ski", ["skull"] = "skull", ["skyscraper"] = "skyscraper", ["snail"] = "snail",
+    ["snake"] = "snake", ["snorkel"] = "snorkel", ["snowflake"] = "snowflake", ["snowman"] = "snowman",
+    ["sock"] = "sock", ["spider"] = "spider", ["spoon"] = "spoon", ["square"] = "square",
+    ["squiggle"] = "squiggle", ["squirrel"] = "squirrel", ["stairs"] = "stairs", ["star"] = "star",
+    ["steak"] = "steak", ["stitches"] = "stitches", ["stove"] = "stove", ["strawberry"] = "strawberry",
+    ["streetlight"] = "streetlight", ["submarine"] = "submarine", ["suitcase"] = "suitcase", ["sun"] = "sun",
+    ["swan"] = "swan", ["sweater"] = "sweater", ["sword"] = "sword", ["syringe"] = "syringe",
+    ["table"] = "table", ["teapot"] = "teapot", ["telephone"] = "telephone", ["television"] = "television",
+    ["tent"] = "tent", ["tiger"] = "tiger", ["toaster"] = "toaster", ["toe"] = "toe",
+    ["toilet"] = "toilet", ["tooth"] = "tooth", ["tornado"] = "tornado", ["tractor"] = "tractor",
+    ["train"] = "train", ["tree"] = "tree", ["triangle"] = "triangle", ["trombone"] = "trombone",
+    ["truck"] = "truck", ["trumpet"] = "trumpet", ["umbrella"] = "umbrella", ["underwear"] = "underwear",
+    ["van"] = "van", ["vase"] = "vase", ["violin"] = "violin", ["whale"] = "whale",
+    ["wheel"] = "wheel", ["windmill"] = "windmill", ["wristwatch"] = "wristwatch", ["yoga"] = "yoga",
+    ["zebra"] = "zebra", ["zigzag"] = "zigzag",
+}
+
+function normalizeTheme(theme)
+    if not theme then return nil end
+    local t = tostring(theme):lower():gsub("%s+", " "):gsub("^%s+",""):gsub("%s+$",""):gsub("%d+$","")
+    local mapped = themeMapping[t]
+    if mapped then return mapped end
+    return t
+end
+
+function log(msg)
+    print("📝", msg)
+    table.insert(testResults, 1, msg)
+    if #testResults > 80 then table.remove(testResults) end
+end
+
+function getCanvasCenter()
+    for _, gui in ipairs(playerGui:GetChildren()) do
+        if gui:IsA("ScreenGui") and gui.Name ~= "DrawAI_V14" then
+            for _, obj in ipairs(gui:GetDescendants()) do
+                if (obj:IsA("Frame") or obj:IsA("ImageLabel") or obj:IsA("CanvasGroup"))
+                   and obj.AbsoluteSize.X > 150 and obj.AbsoluteSize.Y > 150 and obj.Visible then
+                    local center = obj.AbsolutePosition + obj.AbsoluteSize / 2
+                    return center.X, center.Y, math.min(obj.AbsoluteSize.X, obj.AbsoluteSize.Y)
+                end
+            end
+        end
+    end
+    return 500, 400, 300
+end
+
+function httpGetFast(url, useRange)
+    if request then
+        local options = {
+            Url = url,
+            Method = "GET",
+            Headers = useRange and {["Range"] = "bytes=0-51199"} or {}
+        }
+        local success, res = pcall(function() return request(options) end)
+        if success and res and res.Body and #res.Body > 10 then
+            return res.Body
+        end
+    end
+    local success, res = pcall(function() return game:HttpGet(url, true) end)
+    if success and res and #res > 10 then return res end
+    return nil
+end
+
+-- ========== GET API OBJECTS (ข้ามตามจำนวนที่ตั้งค่าไว้ + รองรับ Skip 35) ==========
+function getAllJsonObjects(str)
+    math.randomseed(tick() + os.time() + 9999)
+
+    local objects = {}
+    local depth = 0
+    local inString = false
+    local escape = false
+    local startIdx = nil
+    
+    -- อ่านข้อมูลเพิ่มขึ้นเป็น 3MB เพื่อรองรับการ Skip 35 ภาพ
+    for i = 1, math.min(#str, 3145728) do 
+        local char = str:sub(i, i)
+        if escape then
+            escape = false
+        elseif char == "\\" then
+            escape = true
+        elseif char == "\"" and not escape then
+            inString = not inString
+        elseif not inString then
+            if char == "{" then
+                if depth == 0 then startIdx = i end
+                depth = depth + 1
+            elseif char == "}" then
+                depth = depth - 1
+                if depth == 0 and startIdx then
+                    table.insert(objects, str:sub(startIdx, i))
+                    startIdx = nil
+                end
+            end
+        end
+    end
+    
+    -- ข้ามตามจำนวนที่ตั้งค่า (สูงสุด 35)
+    if #objects > skipCount then
+        for i = 1, skipCount do
+            table.remove(objects, 1)
+        end
+        log("⏩ ข้าม " .. skipCount .. " ภาพแรกแล้ว (University Mode)")
+    end
+    
+    return objects
+end
+
+function validateStrokes(theme, strokes)
+    if not strokes or #strokes == 0 then return false end
+    local strokeCount = #strokes
+    local totalPoints = 0
+    local validStrokeCount = 0
+    for _, s in ipairs(strokes) do
+        if #s >= 2 and #s[1] > 0 and #s[2] > 0 then
+            validStrokeCount = validStrokeCount + 1
+            totalPoints = totalPoints + #s[1]
+        end
+    end
+    if validStrokeCount == 0 then return false end
+    if totalPoints < 15 then return false end
+    return true
+end
+
+-- ========== ⚡ FEATURE CHECK ==========
+function hasExtension(strokes, dir)
+    local minX, maxX, minY, maxY = 9e9, -9e9, 9e9, -9e9
+    for _, s in ipairs(strokes) do
+        for _, x in ipairs(s[1]) do minX, maxX = math.min(minX, x), math.max(maxX, x) end
+        for _, y in ipairs(s[2]) do minY, maxY = math.min(minY, y), math.max(maxY, y) end
+    end
+    local cx, cy = (minX + maxX) / 2, (minY + maxY) / 2
+    local w, h = maxX - minX, maxY - minY
+    for _, s in ipairs(strokes) do
+        local sminX, smaxX, sminY, smaxY = 9e9, -9e9, 9e9, -9e9
+        for _, x in ipairs(s[1]) do sminX, smaxX = math.min(sminX, x), math.max(smaxX, x) end
+        for _, y in ipairs(s[2]) do sminY, smaxY = math.min(sminY, y), math.max(smaxY, y) end
+        if dir == "down" and sminY > cy and (sminY - cy) > h * 0.25 then return true end
+        if dir == "up" and smaxY < cy and (cy - smaxY) > h * 0.2 then return true end
+        if dir == "left" and smaxX < cx and (cx - smaxX) > w * 0.2 then return true end
+        if dir == "right" and sminX > cx and (sminX - cx) > w * 0.2 then return true end
+    end
+    return false
+end
+
+-- ========== 🎨 V14.7 STROKE QUALITY SCORING (เพิ่มใหม่) ==========
+
+-- คำนวณความเรียบของลายเส้น (0-100) ยิ่งสูงยิ่งเรียบ
+function calculateStrokeSmoothness(strokes)
+    if not strokes or #strokes == 0 then return 0 end
+    local totalReversals = 0
+    local totalSegments = 0
+    
+    for _, s in ipairs(strokes) do
+        if #s >= 2 and #s[1] >= 3 then
+            for i = 2, #s[1] - 1 do
+                local vx1 = s[1][i] - s[1][i-1]
+                local vy1 = s[2][i] - s[2][i-1]
+                local vx2 = s[1][i+1] - s[1][i]
+                local vy2 = s[2][i+1] - s[2][i]
+                
+                local dot = vx1 * vx2 + vy1 * vy2
+                local mag1 = math.sqrt(vx1^2 + vy1^2)
+                local mag2 = math.sqrt(vx2^2 + vy2^2)
+                
+                if mag1 > 0 and mag2 > 0 then
+                    local cosAngle = dot / (mag1 * mag2)
+                    -- มุมกลับทิศ (cos < 0) นับเป็น reversal
+                    if cosAngle < -0.3 then
+                        totalReversals = totalReversals + 1
+                    end
+                    totalSegments = totalSegments + 1
+                end
+            end
+        end
+    end
+    
+    if totalSegments == 0 then return 50 end
+    local reversalRate = totalReversals / totalSegments
+    -- ยิ่ง reversal น้อยยิ่งดี: 0 reversal = 100, 0.5 reversal = 0
+    return math.max(0, math.min(100, 100 - (reversalRate * 200)))
+end
+
+-- คำนวณความหนาแน่นของ stroke (0-100) จุดต่อ stroke เหมาะสม
+function calculateStrokeDensity(strokes)
+    if not strokes or #strokes == 0 then return 0 end
+    local totalPoints = 0
+    local totalStrokes = 0
+    local avgDistances = {}
+    
+    for _, s in ipairs(strokes) do
+        if #s >= 2 and #s[1] > 0 then
+            totalStrokes = totalStrokes + 1
+            totalPoints = totalPoints + #s[1]
+            
+            -- คำนวณระยะห่างเฉลี่ยระหว่างจุด
+            if #s[1] >= 2 then
+                local totalDist = 0
+                for i = 2, #s[1] do
+                    local dx = s[1][i] - s[1][i-1]
+                    local dy = s[2][i] - s[2][i-1]
+                    totalDist = totalDist + math.sqrt(dx*dx + dy*dy)
+                end
+                local avgDist = totalDist / (#s[1] - 1)
+                table.insert(avgDistances, avgDist)
+            end
+        end
+    end
+    
+    if totalStrokes == 0 or #avgDistances == 0 then return 0 end
+    local pointsPerStroke = totalPoints / totalStrokes
+    
+    -- คะแนน density: 5-15 points ต่อ stroke = ดีที่สุด
+    local densityScore = 100 - math.abs(pointsPerStroke - 10) * 8
+    densityScore = math.max(0, math.min(100, densityScore))
+    
+    -- ตรวจสอบความสม่ำเสมอของระยะห่าง (std dev ต่ำ = ดี)
+    local sumDist = 0
+    for _, d in ipairs(avgDistances) do sumDist = sumDist + d end
+    local meanDist = sumDist / #avgDistances
+    local variance = 0
+    for _, d in ipairs(avgDistances) do variance = variance + (d - meanDist)^2 end
+    local stdDev = math.sqrt(variance / #avgDistances)
+    local consistencyScore = math.max(0, 100 - stdDev * 2)
+    
+    return (densityScore * 0.6 + consistencyScore * 0.4)
+end
+
+-- คำนวณความสมดุลของ aspect ratio (0-100)
+function calculateAspectBalance(strokes)
+    if not strokes or #strokes == 0 then return 0 end
+    local minX, maxX, minY, maxY = math.huge, -math.huge, math.huge, -math.huge
+    local hasPoints = false
+    
+    for _, s in ipairs(strokes) do
+        if #s >= 2 and #s[1] > 0 then
+            for i = 1, #s[1] do
+                minX = math.min(minX, s[1][i])
+                maxX = math.max(maxX, s[1][i])
+                minY = math.min(minY, s[2][i])
+                maxY = math.max(maxY, s[2][i])
+                hasPoints = true
+            end
+        end
+    end
+    
+    if not hasPoints then return 0 end
+    local w = maxX - minX
+    local h = maxY - minY
+    if w == 0 or h == 0 then return 0 end
+    
+    local ratio = math.max(w, h) / math.min(w, h)
+    -- ratio 1:1 = 100, ratio 4:1 = 0
+    if ratio > 4 then ratio = 4 end
+    return math.max(0, 100 - (ratio - 1) * 33)
+end
+
+-- คำนวณคะแนนรวมคุณภาพ (0-100)
+function calculateQualityScore(strokes, theme)
+    local smoothness = calculateStrokeSmoothness(strokes)
+    local density = calculateStrokeDensity(strokes)
+    local aspect = calculateAspectBalance(strokes)
+    
+    -- ปรับน้ำหนักตาม theme
+    local themeWeights = {
+        saw = {0.5, 0.2, 0.3},
+        brain = {0.3, 0.3, 0.4},
+        drums = {0.4, 0.3, 0.3},
+        elephant = {0.3, 0.3, 0.4},
+        flamingo = {0.4, 0.2, 0.4},
+        piano = {0.3, 0.4, 0.3},
+    }
+    
+    local weights = themeWeights[theme] or {0.4, 0.3, 0.3}
+    local score = smoothness * weights[1] + density * weights[2] + aspect * weights[3]
+    return math.max(0, math.min(100, score)), smoothness, density, aspect
+end
+
+-- ========== 🎨 V14.7 3 MODE FILTER (เพิ่มใหม่) ==========
+
+-- Mode 1: Normal — ใช้ recognized + validate ปกติ
+function isGoodDrawingMode1(theme, strokes, recognized)
+    if recognized == false then return false end
+    return isGoodDrawingLegacy(theme, strokes)
+end
+
+-- Mode 2: Balanced — Mode1 + smoothness + density
+function isGoodDrawingMode2(theme, strokes, recognized)
+    if not isGoodDrawingMode1(theme, strokes, recognized) then return false end
+    local smoothness = calculateStrokeSmoothness(strokes)
+    local density = calculateStrokeDensity(strokes)
+    if smoothness < 60 then return false end
+    if density < 50 then return false end
+    return true
+end
+
+-- Mode 3: Perfect — Mode2 + quality score สูง + scan multiple
+function isGoodDrawingMode3(theme, strokes, recognized)
+    if not isGoodDrawingMode2(theme, strokes, recognized) then return false end
+    local score, smoothness, density, aspect = calculateQualityScore(strokes, theme)
+    if score < 75 then return false end
+    if smoothness < 80 then return false end
+    return true
+end
+
+-- เลือกฟังก์ชันกรองตาม mode ปัจจุบัน
+function isGoodDrawingByMode(theme, strokes, recognized)
+    if drawMode == 1 then
+        return isGoodDrawingMode1(theme, strokes, recognized)
+    elseif drawMode == 2 then
+        return isGoodDrawingMode2(theme, strokes, recognized)
+    else
+        return isGoodDrawingMode3(theme, strokes, recognized)
+    end
+end
+
+-- ========== ⚡ ULTIMATE 100% API FILTER (Legacy — ใช้ใน Mode1) ==========
+function isGoodDrawingLegacy(theme, strokes)
+    if not strokes or #strokes == 0 then return false end
+
+    local totalPoints = 0
+    local strokesCount = 0
+    local minX, maxX, minY, maxY = 9e9, -9e9, 9e9, -9e9
+    
+    for _, s in ipairs(strokes) do
+        if #s >= 2 and #s[1] > 0 then
+            strokesCount = strokesCount + 1
+            for i = 1, #s[1] do
+                totalPoints = totalPoints + 1
+                minX = math.min(minX, s[1][i])
+                maxX = math.max(maxX, s[1][i])
+                minY = math.min(minY, s[2][i])
+                maxY = math.max(maxY, s[2][i])
+            end
+        end
+    end
+
+    if strokesCount < 2 then return false end
+    if totalPoints < 25 then return false end
+
+    local w = maxX - minX
+    local h = maxY - minY
+    if w == 0 or h == 0 then return false end
+    if (w / h) > 8 or (h / w) > 8 then return false end
+
+    -- 🔥 Specific Check
+    if theme == "saw" then
+        local zigzagCount = 0
+        for _, s in ipairs(strokes) do
+            if #s[1] >= 3 then
+                for i = 2, #s[1] - 1 do
+                    local diff1 = s[2][i] - s[2][i-1]
+                    local diff2 = s[2][i+1] - s[2][i]
+                    if (diff1 > 0 and diff2 < 0) or (diff1 < 0 and diff2 > 0) then
+                        zigzagCount = zigzagCount + 1
+                    end
+                end
+            end
+        end
+        if zigzagCount < 3 then return false end
+    end
+
+    if theme == "brain" then
+        local curvePoints = 0
+        for _, s in ipairs(strokes) do
+            if #s[1] >= 5 then
+                for i = 3, #s[1] - 2 do
+                    local vx1 = s[1][i-1] - s[1][i-2]
+                    local vy1 = s[2][i-1] - s[2][i-2]
+                    local vx2 = s[1][i] - s[1][i-1]
+                    local vy2 = s[2][i] - s[2][i-1]
+                    local vx3 = s[1][i+1] - s[1][i]
+                    local vy3 = s[2][i+1] - s[2][i]
+                    local dot1 = vx1 * vx2 + vy1 * vy2
+                    local dot2 = vx2 * vx3 + vy2 * vy3
+                    if dot1 < -50 and dot2 < -50 then
+                        curvePoints = curvePoints + 1
+                    end
+                end
+            end
+        end
+        if curvePoints < 2 then return false end
+    end
+
+    if theme == "drums" then
+        local loops = 0
+        for _, s in ipairs(strokes) do
+            if #s[1] >= 5 then
+                local firstX, firstY = s[1][1], s[2][1]
+                local lastX, lastY = s[1][#s[1]], s[2][#s[2]]
+                local dist = math.sqrt((firstX - lastX)^2 + (firstY - lastY)^2)
+                if dist < 30 then loops = loops + 1 end
+            end
+        end
+        if loops < 2 then return false end
+    end
+
+    if theme == "jail" then
+        local verticalLines = 0
+        for _, s in ipairs(strokes) do
+            if #s[1] >= 3 then
+                local width = math.abs(s[1][1] - s[1][#s[1]])
+                local height = math.abs(s[2][1] - s[2][#s[2]])
+                if height > width * 1.5 then verticalLines = verticalLines + 1 end
+            end
+        end
+        if verticalLines < 2 then return false end
+    end
+
+    if theme == "jacket" then
+        local hasArms = false
+        local hasBody = false
+        for _, s in ipairs(strokes) do
+            if #s[1] >= 5 then
+                local width = math.abs(s[1][1] - s[1][#s[1]])
+                local height = math.abs(s[2][1] - s[2][#s[2]])
+                if width > height then hasArms = true end
+                if height > width then hasBody = true end
+            end
+        end
+        if not hasArms or not hasBody then return false end
+    end
+
+    if theme == "stitches" then
+        local facesDetected = 0
+        for _, s in ipairs(strokes) do
+            if #s[1] >= 5 then
+                local firstX, firstY = s[1][1], s[2][1]
+                local lastX, lastY = s[1][#s[1]], s[2][#s[2]]
+                local dist = math.sqrt((firstX - lastX)^2 + (firstY - lastY)^2)
+                if dist < 25 then facesDetected = facesDetected + 1 end
+            end
+        end
+        if facesDetected > 1 then return false end
+    end
+
+    if theme == "elephant" or theme == "giraffe" or theme == "lion" or theme == "horse" or theme == "dragon" or theme == "penguin" or theme == "flamingo" then
+        local animalWidth = maxX - minX
+        local animalHeight = maxY - minY
+        if (animalWidth < 80 and animalHeight < 80) then return false end
+    end
+
+    local complexThemeChecks = {
+        elephant = function() return hasExtension(strokes, "left") end,
+        flamingo = function() return hasExtension(strokes, "down") end,
+        broccoli = function() return hasExtension(strokes, "up") and hasExtension(strokes, "down") end,
+        broom = function() return hasExtension(strokes, "down") end,
+    }
+
+    if complexThemeChecks[theme] and not complexThemeChecks[theme]() then return false end
+    return true
+end
+
+-- ========== FALLBACK SHAPES ==========
+local fallbackShapes = {}
+
+fallbackShapes.popsicle = function(size, ox, oy)
+    local s = size or 180; local cx, cy = ox or 400, oy or 350
+    local w, h = s * 0.5, s * 0.7; local stickW, stickH = s * 0.12, s * 0.4
+    return {
+        {{x = cx - w/2, y = cy - h/2}, {x = cx + w/2, y = cy - h/2}, {x = cx + w/2, y = cy + h/4}, {x = cx - w/2, y = cy + h/4}, {x = cx - w/2, y = cy - h/2}},
+        {{x = cx - stickW/2, y = cy + h/4}, {x = cx + stickW/2, y = cy + h/4}, {x = cx + stickW/2, y = cy + h/4 + stickH}, {x = cx - stickW/2, y = cy + h/4 + stickH}, {x = cx - stickW/2, y = cy + h/4}},
+    }
+end
+
+fallbackShapes.bird = function(size, ox, oy)
+    local s = size or 180; local cx, cy = ox or 400, oy or 350
+    return {
+        {{x = cx - s*0.2, y = cy}, {x = cx - s*0.15, y = cy - s*0.25}, {x = cx + s*0.1, y = cy - s*0.3}, {x = cx + s*0.25, y = cy - s*0.1}, {x = cx + s*0.2, y = cy + s*0.15}, {x = cx, y = cy + s*0.2}, {x = cx - s*0.2, y = cy}},
+        {{x = cx + s*0.2, y = cy - s*0.15}, {x = cx + s*0.3, y = cy - s*0.2}, {x = cx + s*0.35, y = cy - s*0.1}, {x = cx + s*0.3, y = cy}, {x = cx + s*0.2, y = cy - s*0.05}},
+        {{x = cx + s*0.35, y = cy - s*0.1}, {x = cx + s*0.5, y = cy - s*0.05}, {x = cx + s*0.35, y = cy}},
+        {{x = cx - s*0.1, y = cy - s*0.1}, {x = cx + s*0.05, y = cy - s*0.4}, {x = cx + s*0.2, y = cy - s*0.35}, {x = cx + s*0.15, y = cy - s*0.15}},
+        {{x = cx - s*0.05, y = cy + s*0.2}, {x = cx - s*0.05, y = cy + s*0.35}},
+        {{x = cx + s*0.1, y = cy + s*0.2}, {x = cx + s*0.1, y = cy + s*0.35}},
+    }
+end
+
+fallbackShapes.steak = function(size, ox, oy)
+    local s = size or 180; local cx, cy = ox or 400, oy or 350
+    return {
+        {{x = cx - s*0.3, y = cy}, {x = cx - s*0.25, y = cy - s*0.2}, {x = cx, y = cy - s*0.25}, {x = cx + s*0.25, y = cy - s*0.15}, {x = cx + s*0.3, y = cy + s*0.05}, {x = cx + s*0.2, y = cy + s*0.2}, {x = cx - s*0.1, y = cy + s*0.25}, {x = cx - s*0.3, y = cy + s*0.1}, {x = cx - s*0.3, y = cy}},
+        {{x = cx - s*0.15, y = cy - s*0.1}, {x = cx + s*0.1, y = cy + s*0.05}},
+        {{x = cx - s*0.05, y = cy - s*0.15}, {x = cx + s*0.15, y = cy + s*0.1}},
+        {{x = cx + s*0.05, y = cy - s*0.2}, {x = cx + s*0.2, y = cy}},
+    }
+end
+
+fallbackShapes.trumpet = function(size, ox, oy)
+    local s = size or 180; local cx, cy = ox or 400, oy or 350
+    return {
+        {{x = cx - s*0.4, y = cy - s*0.15}, {x = cx - s*0.45, y = cy - s*0.25}, {x = cx - s*0.35, y = cy - s*0.3}, {x = cx - s*0.2, y = cy - s*0.1}, {x = cx - s*0.2, y = cy + s*0.1}, {x = cx - s*0.35, y = cy + s*0.25}, {x = cx - s*0.45, y = cy + s*0.2}, {x = cx - s*0.4, y = cy + s*0.1}},
+        {{x = cx - s*0.1, y = cy - s*0.25}, {x = cx - s*0.05, y = cy - s*0.3}, {x = cx, y = cy - s*0.25}, {x = cx - s*0.05, y = cy - s*0.2}},
+        {{x = cx + s*0.05, y = cy - s*0.25}, {x = cx + s*0.1, y = cy - s*0.3}, {x = cx + s*0.15, y = cy - s*0.25}, {x = cx + s*0.1, y = cy - s*0.2}},
+        {{x = cx + s*0.2, y = cy - s*0.25}, {x = cx + s*0.25, y = cy - s*0.3}, {x = cx + s*0.3, y = cy - s*0.25}, {x = cx + s*0.25, y = cy - s*0.2}},
+        {{x = cx - s*0.2, y = cy - s*0.05}, {x = cx + s*0.35, y = cy - s*0.05}, {x = cx + s*0.35, y = cy + s*0.05}, {x = cx - s*0.2, y = cy + s*0.05}},
+        {{x = cx + s*0.35, y = cy - s*0.08}, {x = cx + s*0.42, y = cy - s*0.08}, {x = cx + s*0.42, y = cy + s*0.08}, {x = cx + s*0.35, y = cy + s*0.08}},
+    }
+end
+
+fallbackShapes.grapes = function(size, ox, oy)
+    local s = size or 180; local cx, cy = ox or 400, oy or 350
+    local grapes = {}
+    table.insert(grapes, {{x = cx, y = cy - s*0.4}, {x = cx + s*0.05, y = cy - s*0.35}})
+    local positions = {{0, -0.2}, {-0.15, -0.1}, {0.15, -0.1}, {-0.1, 0.05}, {0.1, 0.05}, {0, 0.15}}
+    for _, pos in ipairs(positions) do
+        local gx, gy = cx + pos[1]*s, cy + pos[2]*s
+        table.insert(grapes, {{x = gx - s*0.08, y = gy}, {x = gx - s*0.05, y = gy - s*0.08}, {x = gx + s*0.05, y = gy - s*0.08}, {x = gx + s*0.08, y = gy}, {x = gx + s*0.05, y = gy + s*0.08}, {x = gx - s*0.05, y = gy + s*0.08}, {x = gx - s*0.08, y = gy}})
+    end
+    return grapes
+end
+
+fallbackShapes["paint can"] = function(size, ox, oy)
+    local s = size or 180; local cx, cy = ox or 400, oy or 350
+    local w, h = s * 0.5, s * 0.6
+    return {
+        {{x = cx - w/2, y = cy - h/2}, {x = cx + w/2, y = cy - h/2}, {x = cx + w/2, y = cy + h/2}, {x = cx - w/2, y = cy + h/2}, {x = cx - w/2, y = cy - h/2}},
+        {{x = cx - w/2, y = cy - h/2}, {x = cx - w/3, y = cy - h/2 - s*0.05}, {x = cx + w/3, y = cy - h/2 - s*0.05}, {x = cx + w/2, y = cy - h/2}},
+        {{x = cx - w/3, y = cy - h/2 - s*0.05}, {x = cx - w/3, y = cy - h/2 - s*0.15}, {x = cx + w/3, y = cy - h/2 - s*0.15}, {x = cx + w/3, y = cy - h/2 - s*0.05}},
+    }
+end
+
+fallbackShapes.book = function(size, ox, oy)
+    local s = size or 180; local cx, cy = ox or 400, oy or 350
+    return {
+        {{x = cx - s*0.25, y = cy + s*0.2}, {x = cx - s*0.2, y = cy + s*0.25}, {x = cx + s*0.2, y = cy + s*0.25}, {x = cx + s*0.25, y = cy + s*0.2}},
+        {{x = cx - s*0.25, y = cy + s*0.2}, {x = cx - s*0.3, y = cy - s*0.1}, {x = cx - s*0.05, y = cy - s*0.15}, {x = cx, y = cy + s*0.15}},
+        {{x = cx + s*0.25, y = cy + s*0.2}, {x = cx + s*0.3, y = cy - s*0.1}, {x = cx + s*0.05, y = cy - s*0.15}, {x = cx, y = cy + s*0.15}},
+        {{x = cx - s*0.2, y = cy}, {x = cx - s*0.02, y = cy + s*0.02}},
+        {{x = cx - s*0.22, y = cy - s*0.05}, {x = cx - s*0.02, y = cy - s*0.03}},
+        {{x = cx + s*0.02, y = cy + s*0.02}, {x = cx + s*0.2, y = cy}},
+    }
+end
+
+fallbackShapes.leg = function(size, ox, oy)
+    local s = size or 180; local cx, cy = ox or 400, oy or 350
+    return {
+        {{x = cx - s*0.15, y = cy - s*0.3}, {x = cx - s*0.1, y = cy}, {x = cx - s*0.08, y = cy + s*0.1}},
+        {{x = cx + s*0.05, y = cy - s*0.3}, {x = cx + s*0.1, y = cy}, {x = cx + s*0.12, y = cy + s*0.1}},
+        {{x = cx - s*0.08, y = cy + s*0.1}, {x = cx - s*0.05, y = cy + s*0.25}, {x = cx - s*0.02, y = cy + s*0.35}},
+        {{x = cx + s*0.12, y = cy + s*0.1}, {x = cx + s*0.15, y = cy + s*0.25}, {x = cx + s*0.18, y = cy + s*0.35}},
+        {{x = cx - s*0.02, y = cy + s*0.35}, {x = cx + s*0.05, y = cy + s*0.4}, {x = cx + s*0.2, y = cy + s*0.38}, {x = cx + s*0.22, y = cy + s*0.33}, {x = cx + s*0.18, y = cy + s*0.35}},
+    }
+end
+
+fallbackShapes["light bulb"] = function(size, ox, oy)
+    local s = size or 180; local cx, cy = ox or 400, oy or 350
+    return {
+        {{x = cx, y = cy - s*0.35}, {x = cx + s*0.15, y = cy - s*0.3}, {x = cx + s*0.2, y = cy - s*0.15}, {x = cx + s*0.15, y = cy}, {x = cx - s*0.15, y = cy}, {x = cx - s*0.2, y = cy - s*0.15}, {x = cx - s*0.15, y = cy - s*0.3}, {x = cx, y = cy - s*0.35}},
+        {{x = cx - s*0.1, y = cy}, {x = cx + s*0.1, y = cy}, {x = cx + s*0.08, y = cy + s*0.1}, {x = cx - s*0.08, y = cy + s*0.1}, {x = cx - s*0.1, y = cy}},
+        {{x = cx - s*0.03, y = cy + s*0.1}, {x = cx - s*0.03, y = cy + s*0.15}},
+        {{x = cx + s*0.03, y = cy + s*0.1}, {x = cx + s*0.03, y = cy + s*0.15}},
+    }
+end
+
+-- ========== GET API URLS ==========
+function getApiUrls(theme)
+    local urls = {}
+    local base = "https://storage.googleapis.com/quickdraw_dataset/full/simplified/"
+    local encoded = theme:gsub(" ", "%%20")
+    table.insert(urls, {url = base .. encoded .. ".ndjson", name = theme .. " (%20)"})
+    table.insert(urls, {url = base .. theme .. ".ndjson", name = theme})
+    local noSpace = theme:gsub(" ", "")
+    if noSpace ~= theme then table.insert(urls, {url = base .. noSpace .. ".ndjson", name = noSpace}) end
+    local underscore = theme:gsub(" ", "_")
+    if underscore ~= theme then table.insert(urls, {url = base .. underscore .. ".ndjson", name = underscore}) end
+    return urls
+end
+
+-- ========== 🎨 V14.7 ASYNC API (รองรับ 3 Mode) ==========
+function getGoogleQuickDrawAsync(theme, callback)
+    if not theme or theme == "" then if callback then callback(nil) end return end
+    
+    if apiCache[theme] then
+        if callback then callback(apiCache[theme]) end
+        return
+    end
+    
+    if isLoading[theme] then
+        task.spawn(function()
+            local waited = 0
+            while isLoading[theme] and waited < 8 do task.wait(0.1) waited = waited + 0.1 end
+            callback(apiCache[theme])
+        end)
+        return
+    end
+    isLoading[theme] = true
+    task.spawn(function()
+        local urls = getApiUrls(theme)
+        local res = nil
+        for _, item in ipairs(urls) do
+            log("🔍 Trying: " .. item.name)
+            res = httpGetFast(item.url, true)
+            if res and #res > 10 then break end
+        end
+        local finalStrokes = nil
+        
+        if res and #res > 10 then
+            local objects = getAllJsonObjects(res)
+            
+            -- 🎨 V14.7: Mode 3 สแกนหลายภาพแล้วเลือกคะแนนสูงสุด
+            local candidates = {}
+            local scanLimit = (drawMode == 3) and 50 or 15 -- Mode 3 สแกนมากกว่า
+            
+            for i, obj in ipairs(objects) do
+                if i > scanLimit then break end
+                
+                local ok, data = pcall(function() return HttpService:JSONDecode(obj) end)
+                if ok and data and data.drawing and #data.drawing > 0 then
+                    local validStrokes = {}
+                    for _, stroke in ipairs(data.drawing) do
+                        if #stroke >= 2 and #stroke[1] > 0 and #stroke[2] > 0 then
+                            table.insert(validStrokes, stroke)
+                        end
+                    end
+                    
+                    if validateStrokes(theme, validStrokes) then
+                        local recognized = data.recognized
+                        if isGoodDrawingByMode(theme, validStrokes, recognized) then
+                            if drawMode == 3 then
+                                -- Mode 3: เก็บ candidate พร้อมคะแนน
+                                local score = calculateQualityScore(validStrokes, theme)
+                                table.insert(candidates, {strokes = validStrokes, score = score})
+                                log("🎯 " .. theme .. " | Candidate #" .. #candidates .. " | Score: " .. math.floor(score))
+                            else
+                                finalStrokes = validStrokes
+                                log("✅ " .. theme .. " | Mode " .. drawMode .. " | API ผ่านการกรอง")
+                                break
+                            end
+                        else
+                            log("⚠️ " .. theme .. " | API ไม่ผ่านเกณฑ์ Mode " .. drawMode .. " → ข้าม")
+                        end
+                    end
+                end
+            end
+            
+            -- Mode 3: เลือก candidate คะแนนสูงสุด
+            if drawMode == 3 and #candidates > 0 then
+                table.sort(candidates, function(a, b) return a.score > b.score end)
+                finalStrokes = candidates[1].strokes
+                log("🏆 " .. theme .. " | PERFECT MODE | เลือกภาพคะแนน: " .. math.floor(candidates[1].score) .. " (จาก " .. #candidates .. " ตัวเลือก)")
+            elseif drawMode == 3 and #candidates == 0 then
+                log("❌ " .. theme .. " | PERFECT MODE | ไม่พบภาพที่ผ่านเกณฑ์")
+            end
+        end
+        
+        if not finalStrokes then
+            log("🔄 " .. theme .. " | API ล้มเหลว → ใช้ Fallback")
+            local cx, cy, canvasSize = getCanvasCenter()
+            local size = canvasSize * sizeMultiplier
+            if fallbackShapes[theme] then
+                finalStrokes = fallbackShapes[theme](size, cx, cy)
+            end
+        end
+        
+        if finalStrokes and #finalStrokes > 0 then
+            apiCache[theme] = finalStrokes
+        end
+        isLoading[theme] = nil
+        if callback then callback(finalStrokes) end
+    end)
+end
+
+-- ========== PRELOAD POPULAR THEMES ==========
+function preloadPopularThemes()
+    local popularThemes = {
+        "cat", "dog", "tree", "house", "car", "sun", "moon", "star", "flower", 
+        "rainbow", "cloud", "rain", "snowman", "umbrella", "bird", "fish", 
+        "butterfly", "apple", "banana", "cake", "pizza", "donut", "ice cream",
+        "guitar", "piano", "drums", "trumpet", "violin", "saxophone",
+        "elephant", "giraffe", "lion", "tiger", "zebra", "monkey", "panda",
+        "penguin", "dolphin", "whale", "shark", "octopus", "crab", "snail",
+        "castle", "church", "hospital", "school", "skyscraper",
+        "mountain", "ocean", "river", "waterfall", "desert", "volcano"
+    }
+    
+    log("📥 Preloading " .. #popularThemes .. " popular themes...")
+    preloadComplete = false
+    
+    local loaded = 0
+    local total = #popularThemes
+    
+    for _, theme in ipairs(popularThemes) do
+        task.spawn(function()
+            local normalized = normalizeTheme(theme)
+            if normalized and not apiCache[normalized] and not isLoading[normalized] then
+                getGoogleQuickDrawAsync(normalized, function(strokes)
+                    loaded = loaded + 1
+                    if loaded % 5 == 0 then
+                        log("📥 Preload progress: " .. loaded .. "/" .. total)
+                    end
+                    if loaded >= total then
+                        preloadComplete = true
+                        log("✅ Preload complete! " .. total .. " themes cached.")
+                    end
+                end)
+            else
+                loaded = loaded + 1
+                if loaded >= total then
+                    preloadComplete = true
+                    log("✅ Preload complete! " .. total .. " themes processed.")
+                end
+            end
+        end)
+        task.wait(0.01)
+    end
+end
+
+-- ========== STROKES TO POINTS ==========
+function strokesToPoints(strokes, size, ox, oy)
+    if not strokes or #strokes == 0 then return nil end
+    size = size or 180; ox = ox or 400; oy = oy or 350
+    local minX, maxX, minY, maxY = math.huge, -math.huge, math.huge, -math.huge
+    local hasPoints = false
+    for _, stroke in ipairs(strokes) do
+        if type(stroke) == "table" and #stroke > 0 then
+            if stroke[1] and type(stroke[1]) == "table" and stroke[1].x then
+                for _, p in ipairs(stroke) do if p.x and p.y then minX, maxX, minY, maxY = math.min(minX, p.x), math.max(maxX, p.x), math.min(minY, p.y), math.max(maxY, p.y); hasPoints = true end end
+            elseif #stroke >= 2 and type(stroke[1]) == "table" then
+                for _, x in ipairs(stroke[1]) do minX, maxX = math.min(minX, x), math.max(maxX, x); hasPoints = true end
+                for _, y in ipairs(stroke[2]) do minY, maxY = math.min(minY, y), math.max(maxY, y) end
+            end
+        end
+    end
+    if not hasPoints then return nil end
+    local w, h = maxX - minX, maxY - minY
+    if w == 0 then w = 1 end; if h == 0 then h = 1 end
+    local scale = math.min(size / w, size / h)
+    local sx, sy = ox - (w * scale) / 2, oy - (h * scale) / 2
+    local allStrokes = {}
+    for _, stroke in ipairs(strokes) do
+        local points = {}
+        if type(stroke) == "table" and #stroke > 0 then
+            if stroke[1] and type(stroke[1]) == "table" and stroke[1].x then
+                for _, p in ipairs(stroke) do if p.x and p.y then table.insert(points, {x = p.x, y = p.y}) end end
+            elseif #stroke >= 2 and type(stroke[1]) == "table" then
+                for i = 1, #stroke[1] do table.insert(points, {x = sx + (stroke[1][i] - minX) * scale, y = sy + (stroke[2][i] - minY) * scale}) end
+            end
+        end
+        if #points > 0 then table.insert(allStrokes, points) end
+    end
+    return allStrokes
+end
+
+-- ========== DRAW STROKES ==========
+function drawStrokes(strokesList, theme, source)
+    if not strokesList or #strokesList == 0 or isDrawing then return false end
+    isDrawing = true
+    drawCount = drawCount + 1
+    log("🎨 " .. theme .. " → " .. source .. " (" .. #strokesList .. " strokes)")
+    
+    task.spawn(function()
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+        task.wait(0.01)
+
+        for strokeIndex, points in ipairs(strokesList) do
+            if #points == 0 then continue end
+            VirtualInputManager:SendMouseButtonEvent(points[1].x, points[1].y, 0, true, game, 0)
+            task.wait(0.005)
+            for i = 2, #points do
+                VirtualInputManager:SendMouseMoveEvent(points[i].x, points[i].y, 0, game)
+                if DRAW_DELAY > 0 then task.wait(DRAW_DELAY) end
+            end
+            VirtualInputManager:SendMouseButtonEvent(points[#points].x, points[#points].y, 0, false, game, 0)
+            task.wait(0.005)
+            VirtualInputManager:SendMouseMoveEvent(-100, -100, 0, game)
+            task.wait(0.003)
+            if strokeIndex < #strokesList and #strokesList[strokeIndex + 1] and #strokesList[strokeIndex + 1] > 0 then
+                local nextStart = strokesList[strokeIndex + 1][1]
+                VirtualInputManager:SendMouseMoveEvent(nextStart.x, nextStart.y, 0, game)
+                task.wait(0.003)
+            end
+        end
+        VirtualInputManager:SendMouseButtonEvent(-100, -100, 0, false, game, 0)
+        isDrawing = false
+        log("✅ " .. theme .. " done (" .. #strokesList .. " strokes)")
+    end)
+    return true
+end
+
+-- ========== DRAW THEME ==========
+function drawTheme(theme, forceSync)
+    if not theme or theme == "" or isDrawing then return false end
+    local normalized = normalizeTheme(theme)
+    if not normalized then return false end
+    local cx, cy, canvasSize = getCanvasCenter()
+    local size = canvasSize * sizeMultiplier
+    if autoSizeEnabled then
+        local sizes = {elephant = 0.45, flamingo = 0.50, piano = 0.40, broom = 0.55, octopus = 0.45}
+        sizeMultiplier = sizes[normalized] or 0.35
+        size = canvasSize * sizeMultiplier
+    end
+    log("🎯 Drawing: " .. theme .. " → API: " .. normalized .. " | Mode: " .. modeNames[drawMode])
+    
+    if currentTheme ~= lastThemeProcessed or forceSync then
+        apiCache[normalized] = nil
+    end
+    
+    if apiCache[normalized] then
+        local strokesList = strokesToPoints(apiCache[normalized], size, cx, cy)
+        if strokesList and #strokesList > 0 then return drawStrokes(strokesList, theme, "⚡ Cache") end
+    end
+    getGoogleQuickDrawAsync(normalized, function(strokes)
+        if strokes and currentTheme == theme and drawingApiActive and currentScene == "Drawing" then
+            local strokesList = strokesToPoints(strokes, size, cx, cy)
+            if strokesList and #strokesList > 0 then drawStrokes(strokesList, theme, "⚡ Google API") end
+        end
+    end)
+    return false
+end
+
+-- ========== SYNC MONITOR ==========
+if sync then
+    sync.OnClientEvent:Connect(function(data)
+        pcall(function()
+            if type(data) == "table" and data.data then
+                local state = data.data["gameAtom/state"]
+                if state then
+                    if state.scene and state.scene ~= currentScene then currentScene = state.scene; isDrawing = false; lastThemeProcessed = nil end
+                    if state.theme then
+                        local newTheme = tostring(state.theme):gsub("%d+$",""):gsub("%s+$","")
+                        if newTheme ~= currentTheme then
+                            currentTheme = newTheme
+                            log("🎯 THEME: " .. currentTheme)
+                            if drawingApiActive and currentScene == "Drawing" and currentTheme ~= lastThemeProcessed then
+                                drawTheme(currentTheme)
+                                lastThemeProcessed = currentTheme
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end)
+end
+
+-- ========== GUI ==========
+local gui = Instance.new("ScreenGui")
+gui.Name = "DrawAI_V14"
+gui.ResetOnSpawn = false
+gui.Parent = playerGui
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 320, 0, 520) -- ปรับความสูงเพิ่มสำหรับปุ่ม Mode
+main.Position = UDim2.new(0, 10, 0, 60)
+main.BackgroundColor3 = Color3.fromRGB(10, 0, 20)
+main.BorderSizePixel = 2; main.BorderColor3 = Color3.fromRGB(0, 255, 100); main.Active = true; main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+
+local tLabel = Instance.new("TextLabel"); tLabel.Size = UDim2.new(1, 0, 0, 24); tLabel.BackgroundColor3 = Color3.fromRGB(0, 255, 100); tLabel.Text = "🧠 V14.7 — 3 Mode Quality"; tLabel.TextColor3 = Color3.fromRGB(0, 0, 0); tLabel.TextSize = 10; tLabel.Font = Enum.Font.GothamBold; tLabel.Parent = main
+
+local sLabel = Instance.new("TextLabel"); sLabel.Size = UDim2.new(0.9, 0, 0, 16); sLabel.Position = UDim2.new(0.05, 0, 0.05, 0); sLabel.BackgroundColor3 = Color3.fromRGB(15, 5, 30); sLabel.Text = "⚡ | Draw:0 | Mode: OFF | Cache:0"; sLabel.TextColor3 = Color3.fromRGB(0, 255, 100); sLabel.TextSize = 8; sLabel.Font = Enum.Font.Code; sLabel.Parent = main
+
+local thLabel = Instance.new("TextLabel"); thLabel.Size = UDim2.new(0.9, 0, 0, 16); thLabel.Position = UDim2.new(0.05, 0, 0.10, 0); thLabel.BackgroundColor3 = Color3.fromRGB(15, 5, 30); thLabel.Text = "🎨 Theme: -"; thLabel.TextColor3 = Color3.fromRGB(255, 200, 0); thLabel.TextSize = 8; thLabel.Font = Enum.Font.Code; thLabel.Parent = main
+
+local normLabel = Instance.new("TextLabel"); normLabel.Size = UDim2.new(0.9, 0, 0, 14); normLabel.Position = UDim2.new(0.05, 0, 0.145, 0); normLabel.BackgroundColor3 = Color3.fromRGB(15, 5, 30); normLabel.Text = "🔍 Normalized: -"; normLabel.TextColor3 = Color3.fromRGB(100, 200, 255); normLabel.TextSize = 7; normLabel.Font = Enum.Font.Code; normLabel.Parent = main
+
+local autoSizeLabel = Instance.new("TextLabel"); autoSizeLabel.Size = UDim2.new(0.9, 0, 0, 14); autoSizeLabel.Position = UDim2.new(0.05, 0, 0.185, 0); autoSizeLabel.BackgroundColor3 = Color3.fromRGB(15, 5, 30); autoSizeLabel.Text = "📐 AutoSize: OFF"; autoSizeLabel.TextColor3 = Color3.fromRGB(255, 150, 50); autoSizeLabel.TextSize = 7; autoSizeLabel.Font = Enum.Font.Code; autoSizeLabel.Parent = main
+
+local skipLabel = Instance.new("TextLabel"); skipLabel.Size = UDim2.new(0.9, 0, 0, 14); skipLabel.Position = UDim2.new(0.05, 0, 0.225, 0); skipLabel.BackgroundColor3 = Color3.fromRGB(15, 5, 30); skipLabel.Text = "⏩ Skip: 5"; skipLabel.TextColor3 = Color3.fromRGB(0, 255, 255); skipLabel.TextSize = 7; skipLabel.Font = Enum.Font.Code; skipLabel.Parent = main
+
+-- 🎨 V14.7: Label แสดง Mode ปัจจุบัน
+local modeLabel = Instance.new("TextLabel"); modeLabel.Size = UDim2.new(0.9, 0, 0, 14); modeLabel.Position = UDim2.new(0.05, 0, 0.265, 0); modeLabel.BackgroundColor3 = Color3.fromRGB(15, 5, 30); modeLabel.Text = "🎨 Mode: Balanced"; modeLabel.TextColor3 = modeColors[2]; modeLabel.TextSize = 7; modeLabel.Font = Enum.Font.Code; modeLabel.Parent = main
+
+local statusLabel = Instance.new("TextLabel"); statusLabel.Size = UDim2.new(0.9, 0, 0, 14); statusLabel.Position = UDim2.new(0.05, 0, 0.305, 0); statusLabel.BackgroundColor3 = Color3.fromRGB(15, 5, 30); statusLabel.Text = "⏳ Ready"; statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100); statusLabel.TextSize = 7; statusLabel.Font = Enum.Font.Code; statusLabel.Parent = main
+
+local logFrame = Instance.new("ScrollingFrame"); logFrame.Size = UDim2.new(0.9, 0, 0.12, 0); logFrame.Position = UDim2.new(0.05, 0, 0.35, 0); logFrame.BackgroundColor3 = Color3.fromRGB(0, 0, 0); logFrame.BorderSizePixel = 0; logFrame.ScrollBarThickness = 3; logFrame.ScrollBarImageColor3 = Color3.fromRGB(0, 255, 100); logFrame.Parent = main
+local logText = Instance.new("TextLabel"); logText.Size = UDim2.new(1, 0, 0, 9999); logText.BackgroundTransparency = 1; logText.Text = ""; logText.TextColor3 = Color3.fromRGB(0, 255, 100); logText.TextSize = 7; logText.Font = Enum.Font.Code; logText.TextWrapped = true; logText.Parent = logFrame
+
+-- BUTTONS
+local apiBtn = Instance.new("TextButton"); apiBtn.Size = UDim2.new(0.43, 0, 0, 32); apiBtn.Position = UDim2.new(0.04, 0, 0.48, 0); apiBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 0); apiBtn.Text = "🔴 DRAWING API OFF"; apiBtn.TextColor3 = Color3.fromRGB(0, 0, 0); apiBtn.TextSize = 8; apiBtn.Font = Enum.Font.GothamBold; apiBtn.Parent = main; Instance.new("UICorner", apiBtn).CornerRadius = UDim.new(0, 4)
+apiBtn.MouseButton1Click:Connect(function()
+    drawingApiActive = not drawingApiActive
+    if drawingApiActive then apiBtn.BackgroundColor3 = Color3.fromRGB(0, 255, 100); apiBtn.Text = "🟢 DRAWING API ON"; log("🟢 API ON"); if currentTheme then drawTheme(currentTheme); lastThemeProcessed = currentTheme end else apiBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 0); apiBtn.Text = "🔴 DRAWING API OFF"; log("🔴 API OFF") end
+end)
+
+local forceBtn = Instance.new("TextButton"); forceBtn.Size = UDim2.new(0.43, 0, 0, 32); forceBtn.Position = UDim2.new(0.53, 0, 0.48, 0); forceBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255); forceBtn.Text = "🔄 FORCE DRAW"; forceBtn.TextColor3 = Color3.fromRGB(0, 0, 0); forceBtn.TextSize = 8; forceBtn.Font = Enum.Font.GothamBold; forceBtn.Parent = main; Instance.new("UICorner", forceBtn).CornerRadius = UDim.new(0, 4)
+forceBtn.MouseButton1Click:Connect(function()
+    if currentTheme then forceBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 0); local normalized = normalizeTheme(currentTheme); apiCache[normalized] = nil; log("🔄 FORCE DRAW: กำลังสุ่มภาพใหม่..."); drawTheme(currentTheme, true); task.wait(0.5); forceBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255) end
+end)
+
+-- Size
+local sizeDown = Instance.new("TextButton"); sizeDown.Size = UDim2.new(0.12, 0, 0, 28); sizeDown.Position = UDim2.new(0.04, 0, 0.58, 0); sizeDown.BackgroundColor3 = Color3.fromRGB(255, 100, 100); sizeDown.Text = "−"; sizeDown.TextColor3 = Color3.fromRGB(255, 255, 255); sizeDown.TextSize = 16; sizeDown.Font = Enum.Font.GothamBold; sizeDown.Parent = main
+local sizeLabel = Instance.new("TextLabel"); sizeLabel.Size = UDim2.new(0.14, 0, 0, 28); sizeLabel.Position = UDim2.new(0.17, 0, 0.58, 0); sizeLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20); sizeLabel.Text = "35%"; sizeLabel.TextColor3 = Color3.fromRGB(0, 255, 100); sizeLabel.TextSize = 10; sizeLabel.Font = Enum.Font.Code; sizeLabel.Parent = main
+local sizeUp = Instance.new("TextButton"); sizeUp.Size = UDim2.new(0.12, 0, 0, 28); sizeUp.Position = UDim2.new(0.32, 0, 0.58, 0); sizeUp.BackgroundColor3 = Color3.fromRGB(100, 255, 100); sizeUp.Text = "+"; sizeUp.TextColor3 = Color3.fromRGB(0, 0, 0); sizeUp.TextSize = 16; sizeUp.Font = Enum.Font.GothamBold; sizeUp.Parent = main
+sizeDown.MouseButton1Click:Connect(function() sizeMultiplier = math.max(0.15, sizeMultiplier - 0.05); sizeLabel.Text = math.floor(sizeMultiplier * 100) .. "%" end)
+sizeUp.MouseButton1Click:Connect(function() sizeMultiplier = math.min(1.00, sizeMultiplier + 0.05); sizeLabel.Text = math.floor(sizeMultiplier * 100) .. "%" end)
+
+-- Skip Count Control (1-35)
+local skipDown = Instance.new("TextButton"); skipDown.Size = UDim2.new(0.12, 0, 0, 28); skipDown.Position = UDim2.new(0.47, 0, 0.58, 0); skipDown.BackgroundColor3 = Color3.fromRGB(255, 100, 100); skipDown.Text = "−"; skipDown.TextColor3 = Color3.fromRGB(255, 255, 255); skipDown.TextSize = 16; skipDown.Font = Enum.Font.GothamBold; skipDown.Parent = main
+local skipCountLabel = Instance.new("TextLabel"); skipCountLabel.Size = UDim2.new(0.14, 0, 0, 28); skipCountLabel.Position = UDim2.new(0.60, 0, 0.58, 0); skipCountLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 20); skipCountLabel.Text = "5"; skipCountLabel.TextColor3 = Color3.fromRGB(0, 255, 255); skipCountLabel.TextSize = 10; skipCountLabel.Font = Enum.Font.Code; skipCountLabel.Parent = main
+local skipUp = Instance.new("TextButton"); skipUp.Size = UDim2.new(0.12, 0, 0, 28); skipUp.Position = UDim2.new(0.75, 0, 0.58, 0); skipUp.BackgroundColor3 = Color3.fromRGB(100, 255, 100); skipUp.Text = "+"; skipUp.TextColor3 = Color3.fromRGB(0, 0, 0); skipUp.TextSize = 16; skipUp.Font = Enum.Font.GothamBold; skipUp.Parent = main
+
+skipDown.MouseButton1Click:Connect(function()
+    skipCount = math.max(1, skipCount - 1)
+    skipCountLabel.Text = tostring(skipCount)
+    skipLabel.Text = "⏩ Skip: " .. skipCount
+    log("⏩ Skip Count set to: " .. skipCount)
+end)
+
+skipUp.MouseButton1Click:Connect(function()
+    skipCount = math.min(35, skipCount + 1)
+    skipCountLabel.Text = tostring(skipCount)
+    skipLabel.Text = "⏩ Skip: " .. skipCount
+    log("⏩ Skip Count set to: " .. skipCount)
+end)
+
+-- 🎨 V14.7: ปุ่ม 3 Mode (ใต้ Skip Control)
+local mode1Btn = Instance.new("TextButton"); mode1Btn.Size = UDim2.new(0.28, 0, 0, 26); mode1Btn.Position = UDim2.new(0.04, 0, 0.645, 0); mode1Btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60); mode1Btn.Text = "🟢 1"; mode1Btn.TextColor3 = Color3.fromRGB(255, 255, 255); mode1Btn.TextSize = 8; mode1Btn.Font = Enum.Font.GothamBold; mode1Btn.Parent = main; Instance.new("UICorner", mode1Btn).CornerRadius = UDim.new(0, 4)
+
+local mode2Btn = Instance.new("TextButton"); mode2Btn.Size = UDim2.new(0.28, 0, 0, 26); mode2Btn.Position = UDim2.new(0.36, 0, 0.645, 0); mode2Btn.BackgroundColor3 = modeColors[2]; mode2Btn.Text = "🟡 2"; mode2Btn.TextColor3 = Color3.fromRGB(0, 0, 0); mode2Btn.TextSize = 8; mode2Btn.Font = Enum.Font.GothamBold; mode2Btn.Parent = main; Instance.new("UICorner", mode2Btn).CornerRadius = UDim.new(0, 4)
+
+local mode3Btn = Instance.new("TextButton"); mode3Btn.Size = UDim2.new(0.28, 0, 0, 26); mode3Btn.Position = UDim2.new(0.68, 0, 0.645, 0); mode3Btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60); mode3Btn.Text = "🩷 3"; mode3Btn.TextColor3 = Color3.fromRGB(255, 255, 255); mode3Btn.TextSize = 8; mode3Btn.Font = Enum.Font.GothamBold; mode3Btn.Parent = main; Instance.new("UICorner", mode3Btn).CornerRadius = UDim.new(0, 4)
+
+-- ฟังก์ชันอัปเดตสีปุ่ม Mode
+local function updateModeButtons()
+    mode1Btn.BackgroundColor3 = (drawMode == 1) and modeColors[1] or Color3.fromRGB(60, 60, 60)
+    mode1Btn.TextColor3 = (drawMode == 1) and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+    
+    mode2Btn.BackgroundColor3 = (drawMode == 2) and modeColors[2] or Color3.fromRGB(60, 60, 60)
+    mode2Btn.TextColor3 = (drawMode == 2) and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+    
+    mode3Btn.BackgroundColor3 = (drawMode == 3) and modeColors[3] or Color3.fromRGB(60, 60, 60)
+    mode3Btn.TextColor3 = (drawMode == 3) and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
+    
+    modeLabel.Text = "🎨 Mode: " .. modeNames[drawMode]
+    modeLabel.TextColor3 = modeColors[drawMode]
+end
+
+mode1Btn.MouseButton1Click:Connect(function()
+    drawMode = 1
+    getgenv().QuickDrawCache = {}
+    apiCache = getgenv().QuickDrawCache
+    updateModeButtons()
+    log("🟢 Mode 1: Normal | Cache cleared")
+end)
+
+mode2Btn.MouseButton1Click:Connect(function()
+    drawMode = 2
+    getgenv().QuickDrawCache = {}
+    apiCache = getgenv().QuickDrawCache
+    updateModeButtons()
+    log("🟡 Mode 2: Balanced | Cache cleared")
+end)
+
+mode3Btn.MouseButton1Click:Connect(function()
+    drawMode = 3
+    getgenv().QuickDrawCache = {}
+    apiCache = getgenv().QuickDrawCache
+    updateModeButtons()
+    log("🩷 Mode 3: Perfect | Cache cleared")
+end)
+
+-- Auto Size
+local autoSizeBtn = Instance.new("TextButton"); autoSizeBtn.Size = UDim2.new(0.43, 0, 0, 28); autoSizeBtn.Position = UDim2.new(0.04, 0, 0.71, 0); autoSizeBtn.BackgroundColor3 = Color3.fromRGB(255, 150, 50); autoSizeBtn.Text = "📐 AUTO SIZE OFF"; autoSizeBtn.TextColor3 = Color3.fromRGB(0, 0, 0); autoSizeBtn.TextSize = 8; autoSizeBtn.Font = Enum.Font.GothamBold; autoSizeBtn.Parent = main; Instance.new("UICorner", autoSizeBtn).CornerRadius = UDim.new(0, 4)
+autoSizeBtn.MouseButton1Click:Connect(function()
+    autoSizeEnabled = not autoSizeEnabled
+    if autoSizeEnabled then autoSizeBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 255); autoSizeBtn.Text = "📐 AUTO SIZE ON"; autoSizeLabel.Text = "📐 AutoSize: ON"; log("📐 Auto Size ON") else autoSizeBtn.BackgroundColor3 = Color3.fromRGB(255, 150, 50); autoSizeBtn.Text = "📐 AUTO SIZE OFF"; autoSizeLabel.Text = "📐 AutoSize: OFF"; log("📐 Auto Size OFF") end
+end)
+
+-- Speed
+local speedBtn = Instance.new("TextButton"); speedBtn.Size = UDim2.new(0.43, 0, 0, 28); speedBtn.Position = UDim2.new(0.53, 0, 0.71, 0); speedBtn.BackgroundColor3 = Color3.fromRGB(255, 200, 0); speedBtn.Text = "🚀 FAST MODE"; speedBtn.TextColor3 = Color3.fromRGB(0, 0, 0); speedBtn.TextSize = 8; speedBtn.Font = Enum.Font.GothamBold; speedBtn.Parent = main; Instance.new("UICorner", speedBtn).CornerRadius = UDim.new(0, 4)
+speedBtn.MouseButton1Click:Connect(function() DRAW_DELAY = DRAW_DELAY == 0 and 0.001 or 0; speedBtn.Text = DRAW_DELAY == 0 and "🚀 ZERO DELAY" or "⚡ FAST MODE"; log(DRAW_DELAY == 0 and "🚀 ZERO DELAY!" or "⚡ Fast mode") end)
+
+-- Preload
+local preloadBtn = Instance.new("TextButton"); preloadBtn.Size = UDim2.new(0.43, 0, 0, 28); preloadBtn.Position = UDim2.new(0.04, 0, 0.78, 0); preloadBtn.BackgroundColor3 = Color3.fromRGB(200, 100, 255); preloadBtn.Text = "📥 PRELOAD"; preloadBtn.TextColor3 = Color3.fromRGB(0, 0, 0); preloadBtn.TextSize = 8; preloadBtn.Font = Enum.Font.GothamBold; preloadBtn.Parent = main; Instance.new("UICorner", preloadBtn).CornerRadius = UDim.new(0, 4)
+preloadBtn.MouseButton1Click:Connect(function() preloadPopularThemes() end)
+
+-- Clear
+local clearBtn = Instance.new("TextButton"); clearBtn.Size = UDim2.new(0.43, 0, 0, 28); clearBtn.Position = UDim2.new(0.53, 0, 0.78, 0); clearBtn.BackgroundColor3 = Color3.fromRGB(255, 80, 80); clearBtn.Text = "🗑️ Clear Cache"; clearBtn.TextColor3 = Color3.fromRGB(255, 255, 255); clearBtn.TextSize = 8; clearBtn.Font = Enum.Font.GothamBold; clearBtn.Parent = main; Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 4)
+clearBtn.MouseButton1Click:Connect(function() getgenv().QuickDrawCache = {}; getgenv().QuickDrawLoading = {}; apiCache = getgenv().QuickDrawCache; isLoading = getgenv().QuickDrawLoading; log("🗑️ Cache cleared") end)
+
+-- Close
+local closeBtn = Instance.new("TextButton"); closeBtn.Size = UDim2.new(0.35, 0, 0, 24); closeBtn.Position = UDim2.new(0.33, 0, 0.93, 0); closeBtn.Text = "✕ Close"; closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255); closeBtn.BackgroundColor3 = Color3.fromRGB(100, 0, 0); closeBtn.TextSize = 10; closeBtn.Font = Enum.Font.GothamBold; closeBtn.Parent = main; Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+closeBtn.MouseButton1Click:Connect(function() gui:Destroy(); drawingApiActive = false end)
+
+-- DRAG
+local drag, ds, fs = false, nil, nil
+main.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then drag = true; ds = i.Position; fs = main.Position end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if drag then local d = i.Position - ds; main.Position = UDim2.new(fs.X.Scale, fs.X.Offset + d.X, fs.Y.Scale, fs.Y.Offset + d.Y) end
+end)
+UserInputService.InputEnded:Connect(function() drag = false end)
+
+-- UPDATE LOOP
+task.spawn(function()
+    while task.wait(0.2) do
+        pcall(function()
+            thLabel.Text = "🎨 Theme: " .. (currentTheme or "-")
+            normLabel.Text = "🔍 Normalized: " .. (normalizeTheme(currentTheme) or "-")
+            local cacheCount = 0; for _ in pairs(apiCache) do cacheCount = cacheCount + 1 end
+            sLabel.Text = "⚡ | Draw:" .. drawCount .. " | Mode: " .. (drawingApiActive and "ON" or "OFF") .. " | Cache:" .. cacheCount
+            local loadingCount = 0; for _ in pairs(isLoading) do loadingCount = loadingCount + 1 end
+            if loadingCount > 0 then statusLabel.Text = "⏳ Loading " .. loadingCount .. " theme(s)..."; statusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+            elseif preloadComplete then statusLabel.Text = "✅ Ready (Preloaded)"; statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+            else statusLabel.Text = "⏳ Ready | Delay: " .. DRAW_DELAY .. "s"; statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100) end
+            local ls = ""; for i = math.max(1, #testResults - 6), #testResults do ls = ls .. testResults[i] .. "\n" end; logText.Text = ls; logFrame.CanvasSize = UDim2.new(0, 0, 0, logText.TextBounds.Y + 10)
+        end)
+    end
+end)
+
+-- ========== INIT ==========
+task.delay(1, function() 
+    preloadPopularThemes() 
+end)
+
+log("🚀 V14.7 3 MODE QUALITY LOADED!")
+log("🎯 Mode 1: Normal | Mode 2: Balanced | Mode 3: Perfect")
+log("🩷 Mode 3 = กรองภาพสวยสุด สแกน 50 ตัวเลือก เลือกคะแนนสูงสุด")
+log("🟢 Press DRAWING API ON to start")
