@@ -1,0 +1,1836 @@
+--[[══════════════════════════════════════════════════════════════════════════════
+    KIRBY'S SPEED DRAW! UNIVERSAL RECONNAISSANCE SUITE v7.0
+    ─────────────────────────────────────────────────────────────────────────────
+    Single-file, self-contained, persistent scanning architecture.
+    No external requires. No dependencies. Production-grade instrumentation.
+    
+    TARGET: Speed Draw! (Roblox) — Drawing System Reconnaissance
+    CAPABILITY: Canvas detection, Remote hooking, ECS buffer decoding,
+                Color palette extraction, Rate analysis, Coordinate mapping,
+                Anti-cheat enumeration, Real-time UI, JSON export.
+══════════════════════════════════════════════════════════════════════════════]]
+
+--══════════════════════════════════════════════════════════════════════════════
+-- SECTION 1: DATA MODELS & TYPE DEFINITIONS
+--══════════════════════════════════════════════════════════════════════════════
+
+local DataModels = {}
+
+-- Canvas detection result model
+DataModels.CanvasResult = {
+    Found = false,
+    Instance = nil,
+    Path = "",
+    Name = "",
+    AbsoluteSize = Vector2.new(0, 0),
+    AbsolutePosition = Vector2.new(0, 0),
+    ZIndex = 0,
+    Active = false,
+    Selectable = false,
+    HasInputBegan = false,
+    InputConnectionCount = 0,
+    ClassName = "",
+    ParentPath = "",
+    DetectionMethod = "", -- "size", "input", "name", "child_pattern"
+    Confidence = 0, -- 0-100
+    ChildCount = 0,
+    IsVisible = false,
+    CanvasType = "unknown" -- "drawing", "viewport", "image", "frame"
+}
+
+-- Remote event capture model
+DataModels.RemoteCapture = {
+    Timestamp = 0,
+    RemotePath = "",
+    RemoteName = "",
+    EventType = "", -- "FireServer", "OnClientEvent", "InvokeServer", "OnClientInvoke"
+    Arguments = {},
+    ArgumentCount = 0,
+    ArgumentTypes = {},
+    DecodedPayload = {},
+    FireCount = 0,
+    FirstFire = 0,
+    LastFire = 0,
+    RateAverage = 0,
+    IsDrawingRelated = false,
+    DrawingClassification = "" -- "stroke", "pixel", "buffer", "color", "submit", "other"
+}
+
+-- Stroke analysis model
+DataModels.StrokeAnalysis = {
+    StrokeType = "unknown", -- "straight_line", "curve", "pixel", "buffer", "batch"
+    PointCount = 0,
+    Points = {},
+    Color = nil,
+    Thickness = 0,
+    Transparency = 0,
+    StartPoint = nil,
+    EndPoint = nil,
+    BoundingBox = nil,
+    CoordinateSystem = "unknown", -- "pixel", "normalized", "world"
+    CoordinateOrigin = "unknown", -- "top_left", "center", "bottom_left"
+    IsWithinCanvasBounds = false
+}
+
+-- Color palette model
+DataModels.ColorPalette = {
+    Found = false,
+    Path = "",
+    Name = "",
+    ColorCount = 0,
+    Colors = {},
+    Format = "unknown", -- "Color3", "Hex", "Index", "BrickColor"
+    SelectionMethod = "unknown", -- "click", "property", "remote"
+    IsCustomPicker = false,
+    Samples = {}
+}
+
+-- Rate limiter model
+DataModels.RateAnalysis = {
+    RemoteName = "",
+    FireCount = 0,
+    TimeSpan = 0,
+    AverageRate = 0, -- fires per second
+    PeakRate = 0,
+    CooldownDetected = false,
+    CooldownDuration = 0,
+    LastFireTime = 0,
+    FireHistory = {} -- {timestamp, args_hash}
+}
+
+-- Anti-cheat detection model
+DataModels.AntiCheatEntry = {
+    ScriptPath = "",
+    ScriptName = "",
+    DetectionType = "", -- "anti", "cheat", "detect", "validate", "mouse", "rate", "heartbeat"
+    Severity = "low", -- "low", "medium", "high", "critical"
+    Details = {},
+    CodeSnippet = ""
+}
+
+-- Master report model
+DataModels.FullReport = {
+    ScanTimestamp = 0,
+    PlaceId = 0,
+    GameName = "",
+    Canvas = {},
+    Remotes = {},
+    Strokes = {},
+    Colors = {},
+    Rates = {},
+    Coordinates = {},
+    AntiCheat = {},
+    Metadata = {}
+}
+
+--══════════════════════════════════════════════════════════════════════════════
+-- SECTION 2: CONFIGURATION MANAGER WITH JSON SERIALIZATION
+--══════════════════════════════════════════════════════════════════════════════
+
+local ConfigManager = {}
+
+-- Runtime configuration (mutable)
+ConfigManager.Settings = {
+    -- Canvas detection thresholds
+    MIN_CANVAS_SIZE = Vector2.new(300, 300),
+    MAX_CANVAS_SIZE = Vector2.new(5000, 5000),
+    
+    -- Blacklist patterns (case-insensitive substring matching)
+    UI_BLACKLIST = {
+        "dock", "backpack", "inventory", "hotbar", "chat", "toggle", 
+        "menu", "settings", "leaderboard", "notification", "prompt",
+        "modal", "popup", "tooltip", "scrollbar", "scroll", "list",
+        "dropdown", "slider", "checkbox", "radio", "tab", "nav",
+        "header", "footer", "sidebar", "toolbar", "status", "debug",
+        "console", "log", "error", "warning", "info", "hint",
+        "tutorial", "guide", "help", "credits", "shop", "store",
+        "purchase", "buy", "sell", "trade", "gift", "reward",
+        "achievement", "badge", "rank", "level", "xp", "exp",
+        "coin", "cash", "gem", "token", "point", "score",
+        "timer", "clock", "countdown", "round", "phase", "vote",
+        "playerlist", "nametag", "health", "stamina", "mana",
+        "minimap", "map", "compass", "radar", "waypoint",
+        "quest", "mission", "objective", "task", "challenge",
+        "social", "friend", "party", "guild", "clan", "team",
+        "emote", "dance", "gesture", "action", "skill", "ability",
+        "buff", "debuff", "effect", "aura", "shield", "barrier"
+    },
+    
+    -- Canvas positive indicators (boost confidence)
+    CANVAS_POSITIVE = {
+        "canvas", "draw", "paint", "sketch", "art", "board",
+        "paper", "surface", "area", "workspace", "edit", "create",
+        "stroke", "brush", "pen", "pencil", "line", "pixel",
+        "layer", "frame_draw", "drawing_area", "paint_surface"
+    },
+    
+    -- Remote name patterns for drawing-related events
+    DRAWING_REMOTE_PATTERNS = {
+        "draw", "stroke", "paint", "canvas", "line", "brush", 
+        "pixel", "buffer", "send", "submit", "art", "sketch",
+        "point", "click", "input", "mouse", "touch", "pen",
+        "color", "palette", "fill", "erase", "clear", "undo",
+        "redo", "layer", "image", "texture", "sprite", "batch"
+    },
+    
+    -- Anti-cheat detection patterns
+    ANTICHEAT_PATTERNS = {
+        "anti", "cheat", "hack", "exploit", "detect", "validate",
+        "verify", "check", "inspect", "scan", "monitor", "watch",
+        "guard", "shield", "protect", "secure", "safe", "trust",
+        "integrity", "authentic", "legit", "real", "human",
+        "bot", "auto", "macro", "script", "inject", "hook",
+        "spoof", "fake", "false", "invalid", "illegal", "banned",
+        "kick", "ban", "punish", "report", "flag", "log",
+        "mouse", "cursor", "pointer", "position", "movement",
+        "speed", "rate", "limit", "throttle", "cooldown", "delay",
+        "heartbeat", "tick", "frame", "render", "step", "update"
+    },
+    
+    -- Scanning behavior
+    SCAN_INTERVAL = 0.5, -- seconds between scan cycles
+    MAX_SCAN_DEPTH = 15, -- maximum instance tree depth
+    PERSISTENT_SCAN = true, -- keep scanning until all targets found
+    HOOK_ALL_REMOTES = true, -- hook every remote, not just drawing-related
+    CAPTURE_ARGUMENTS = true, -- deep-inspect remote arguments
+    MAX_ARGUMENT_DEPTH = 5, -- recursion limit for table inspection
+    RATE_HISTORY_SIZE = 100, -- max fire events to track per remote
+    
+    -- UI settings
+    UI_ENABLED = true,
+    UI_POSITION = UDim2.new(0.02, 0, 0.02, 0),
+    UI_SIZE = UDim2.new(0, 420, 0, 320),
+    UI_THEME = "dark", -- "dark", "light", "neon"
+    
+    -- Export settings
+    AUTO_EXPORT_CLIPBOARD = true,
+    EXPORT_INTERVAL = 30, -- seconds between auto-exports
+    COMPRESS_JSON = false,
+    
+    -- Debug
+    VERBOSE_LOGGING = true,
+    LOG_TO_CONSOLE = true,
+    LOG_TO_UI = true
+}
+
+-- JSON serialization implementation (no external dependencies)
+function ConfigManager.ToJSON(value, indent, depth)
+    indent = indent or 0
+    depth = depth or 0
+    
+    if depth > 10 then return "\"[MAX_DEPTH]\"" end
+    
+    local t = typeof(value)
+    
+    if t == "nil" then
+        return "null"
+    elseif t == "boolean" then
+        return tostring(value)
+    elseif t == "number" then
+        if value ~= value then return "\"NaN\""
+        elseif value == math.huge then return "\"Infinity\""
+        elseif value == -math.huge then return "\"-Infinity\""
+        else return tostring(value) end
+    elseif t == "string" then
+        local escaped = value:gsub("\\", "\\\\"):gsub("\"", "\\\""):gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("\t", "\\t")
+        return "\"" .. escaped .. "\""
+    elseif t == "Vector2" then
+        return string.format("{\"X\":%s,\"Y\":%s,\"__type\":\"Vector2\"}", 
+            ConfigManager.ToJSON(value.X, 0, depth+1),
+            ConfigManager.ToJSON(value.Y, 0, depth+1))
+    elseif t == "Vector3" then
+        return string.format("{\"X\":%s,\"Y\":%s,\"Z\":%s,\"__type\":\"Vector3\"}",
+            ConfigManager.ToJSON(value.X, 0, depth+1),
+            ConfigManager.ToJSON(value.Y, 0, depth+1),
+            ConfigManager.ToJSON(value.Z, 0, depth+1))
+    elseif t == "Color3" then
+        return string.format("{\"R\":%s,\"G\":%s,\"B\":%s,\"Hex\":\"%s\",\"__type\":\"Color3\"}",
+            ConfigManager.ToJSON(value.R, 0, depth+1),
+            ConfigManager.ToJSON(value.G, 0, depth+1),
+            ConfigManager.ToJSON(value.B, 0, depth+1),
+            string.format("#%02X%02X%02X", math.floor(value.R*255), math.floor(value.G*255), math.floor(value.B*255)))
+    elseif t == "CFrame" then
+        local pos = value.Position
+        return string.format("{\"P\":{\"X\":%s,\"Y\":%s,\"Z\":%s},\"__type\":\"CFrame\"}",
+            ConfigManager.ToJSON(pos.X, 0, depth+1),
+            ConfigManager.ToJSON(pos.Y, 0, depth+1),
+            ConfigManager.ToJSON(pos.Z, 0, depth+1))
+    elseif t == "EnumItem" then
+        return string.format("{\"EnumType\":\"%s\",\"Name\":\"%s\",\"Value\":%d}",
+            tostring(value.EnumType), value.Name, value.Value)
+    elseif t == "Instance" then
+        return string.format("{\"__type\":\"Instance\",\"ClassName\":\"%s\",\"Name\":\"%s\",\"Path\":\"%s\"}",
+            value.ClassName, value.Name, value:GetFullName())
+    elseif t == "table" then
+        -- Check if array-like
+        local isArray = true
+        local maxIndex = 0
+        for k, _ in pairs(value) do
+            if typeof(k) ~= "number" or k < 1 or k % 1 ~= 0 then
+                isArray = false
+                break
+            end
+            maxIndex = math.max(maxIndex, k)
+        end
+        if isArray and maxIndex ~= #value then isArray = false end
+        
+        local parts = {}
+        local spacing = string.rep("  ", indent + 1)
+        local endSpacing = string.rep("  ", indent)
+        
+        if isArray then
+            for i, v in ipairs(value) do
+                table.insert(parts, spacing .. ConfigManager.ToJSON(v, indent + 1, depth + 1))
+            end
+            if #parts == 0 then return "[]" end
+            return "[\n" .. table.concat(parts, ",\n") .. "\n" .. endSpacing .. "]"
+        else
+            for k, v in pairs(value) do
+                local key = typeof(k) == "string" and k or "[" .. ConfigManager.ToJSON(k, 0, depth+1) .. "]"
+                table.insert(parts, spacing .. "\"" .. key .. "\":" .. ConfigManager.ToJSON(v, indent + 1, depth + 1))
+            end
+            if #parts == 0 then return "{}" end
+            return "{\n" .. table.concat(parts, ",\n") .. "\n" .. endSpacing .. "}"
+        end
+    elseif t == "buffer" then
+        local len = buffer.len(value)
+        local bytes = {}
+        for i = 0, math.min(len - 1, 32) do
+            table.insert(bytes, string.format("%02X", buffer.readu8(value, i)))
+        end
+        local preview = table.concat(bytes, " ")
+        if len > 32 then preview = preview .. " ... (" .. len .. " bytes)" end
+        return string.format("{\"__type\":\"buffer\",\"len\":%d,\"preview\":\"%s\"}", len, preview)
+    else
+        return "\"" .. tostring(value):gsub("\"", "\\\"") .. "\""
+    end
+end
+
+function ConfigManager.SerializeReport(report)
+    return ConfigManager.ToJSON(report, 0, 0)
+end
+
+function ConfigManager.CopyToClipboard(text)
+    pcall(function()
+        if syn and syn.write_clipboard then
+            syn.write_clipboard(text)
+        elseif setclipboard then
+            setclipboard(text)
+        elseif clipboard then
+            clipboard(text)
+        elseif toclipboard then
+            toclipboard(text)
+        end
+    end)
+end
+
+--══════════════════════════════════════════════════════════════════════════════
+-- SECTION 3: CORE ALGORITHM CLASS — CANVAS DETECTION ENGINE
+--══════════════════════════════════════════════════════════════════════════════
+
+local CanvasDetector = {}
+CanvasDetector.Results = {}
+CanvasDetector.ScanHistory = {}
+CanvasDetector.BestCandidate = nil
+
+function CanvasDetector.IsBlacklisted(name)
+    name = name:lower()
+    for _, pattern in ipairs(ConfigManager.Settings.UI_BLACKLIST) do
+        if name:find(pattern:lower()) then
+            return true, pattern
+        end
+    end
+    return false, nil
+end
+
+function CanvasDetector.IsPositiveIndicator(name)
+    name = name:lower()
+    local score = 0
+    for _, pattern in ipairs(ConfigManager.Settings.CANVAS_POSITIVE) do
+        if name:find(pattern:lower()) then
+            score = score + 25
+        end
+    end
+    return score
+end
+
+function CanvasDetector.GetInstancePath(instance)
+    local path = instance.Name
+    local parent = instance.Parent
+    while parent do
+        path = parent.Name .. "." .. path
+        parent = parent.Parent
+    end
+    return path
+end
+
+function CanvasDetector.CountInputConnections(instance)
+    local count = 0
+    pcall(function()
+        if getconnections then
+            local conns = getconnections(instance.InputBegan)
+            count = #conns
+        end
+    end)
+    return count
+end
+
+function CanvasDetector.HasInputBeganConnection(instance)
+    local count = CanvasDetector.CountInputConnections(instance)
+    return count > 0, count
+end
+
+function CanvasDetector.AnalyzeGuiObject(obj, depth)
+    local result = {}
+    for k, v in pairs(DataModels.CanvasResult) do
+        result[k] = v
+    end
+    
+    local name = obj.Name
+    local className = obj.ClassName
+    local absSize = obj.AbsoluteSize
+    local absPos = obj.AbsolutePosition
+    
+    -- Basic properties
+    result.Instance = obj
+    result.Path = CanvasDetector.GetInstancePath(obj)
+    result.Name = name
+    result.ClassName = className
+    result.AbsoluteSize = absSize
+    result.AbsolutePosition = absPos
+    result.ZIndex = obj.ZIndex or 0
+    result.Active = obj.Active or false
+    result.Selectable = obj.Selectable or false
+    result.ChildCount = #obj:GetChildren()
+    result.IsVisible = obj.Visible ~= false
+    
+    -- Check blacklist
+    local isBlacklisted, blacklistReason = CanvasDetector.IsBlacklisted(name)
+    if isBlacklisted then
+        result.Confidence = -100
+        result.DetectionMethod = "blacklisted:" .. blacklistReason
+        return result
+    end
+    
+    -- Size-based detection
+    local sizeScore = 0
+    if absSize.X >= ConfigManager.Settings.MIN_CANVAS_SIZE.X and 
+       absSize.Y >= ConfigManager.Settings.MIN_CANVAS_SIZE.Y then
+        sizeScore = 30
+        if absSize.X <= ConfigManager.Settings.MAX_CANVAS_SIZE.X and
+           absSize.Y <= ConfigManager.Settings.MAX_CANVAS_SIZE.Y then
+            sizeScore = sizeScore + 10
+        end
+    end
+    
+    -- Input detection
+    local hasInput, inputCount = CanvasDetector.HasInputBeganConnection(obj)
+    result.HasInputBegan = hasInput
+    result.InputConnectionCount = inputCount
+    local inputScore = hasInput and 25 or 0
+    
+    -- Name-based detection
+    local nameScore = CanvasDetector.IsPositiveIndicator(name)
+    
+    -- Class-based detection
+    local classScore = 0
+    if className == "CanvasGroup" then classScore = 15
+    elseif className == "Frame" then classScore = 10
+    elseif className == "ImageLabel" then classScore = 10
+    elseif className == "ImageButton" then classScore = 10
+    elseif className == "TextButton" then classScore = 5
+    elseif className == "ScrollingFrame" then classScore = 5
+    end
+    
+    -- Child pattern detection
+    local childScore = 0
+    for _, child in ipairs(obj:GetChildren()) do
+        local childName = child.Name:lower()
+        if childName:find("stroke") or childName:find("line") or childName:find("draw") then
+            childScore = childScore + 10
+        end
+        if childName:find("color") or childName:find("palette") or childName:find("picker") then
+            childScore = childScore + 10
+        end
+        if child:IsA("UIStroke") or child:IsA("UIGradient") then
+            childScore = childScore + 5
+        end
+    end
+    
+    -- Parent context
+    local parentScore = 0
+    local parent = obj.Parent
+    if parent then
+        local parentName = parent.Name:lower()
+        if parentName:find("game") or parentName:find("match") or parentName:find("round") then
+            parentScore = 10
+        end
+        if parentName:find("draw") or parentName:find("canvas") or parentName:find("art") then
+            parentScore = parentScore + 15
+        end
+    end
+    
+    -- Visibility and interaction
+    local interactionScore = 0
+    if obj.Active then interactionScore = interactionScore + 5 end
+    if obj.Selectable then interactionScore = interactionScore + 5 end
+    if obj.Visible ~= false then interactionScore = interactionScore + 5 end
+    
+    -- Calculate total confidence
+    result.Confidence = sizeScore + inputScore + nameScore + classScore + 
+                       childScore + parentScore + interactionScore
+    
+    -- Determine detection method
+    local methods = {}
+    if sizeScore > 0 then table.insert(methods, "size") end
+    if inputScore > 0 then table.insert(methods, "input") end
+    if nameScore > 0 then table.insert(methods, "name") end
+    if childScore > 0 then table.insert(methods, "child_pattern") end
+    result.DetectionMethod = table.concat(methods, "+")
+    
+    -- Determine canvas type
+    if result.Confidence >= 60 then
+        result.CanvasType = "drawing"
+        result.Found = true
+    elseif result.Confidence >= 40 then
+        result.CanvasType = "viewport"
+    elseif result.Confidence >= 20 then
+        result.CanvasType = "image"
+    else
+        result.CanvasType = "frame"
+    end
+    
+    return result
+end
+
+function CanvasDetector.ScanPlayerGui(playerGui, depth)
+    depth = depth or 0
+    if depth > ConfigManager.Settings.MAX_SCAN_DEPTH then return end
+    
+    local candidates = {}
+    
+    local function scanRecursive(instance, currentDepth)
+        if currentDepth > ConfigManager.Settings.MAX_SCAN_DEPTH then return end
+        if not instance:IsA("GuiObject") then
+            -- Still scan children of non-GuiObject containers
+            for _, child in ipairs(instance:GetChildren()) do
+                scanRecursive(child, currentDepth + 1)
+            end
+            return
+        end
+        
+        local result = CanvasDetector.AnalyzeGuiObject(instance, currentDepth)
+        table.insert(candidates, result)
+        
+        -- Scan children
+        for _, child in ipairs(instance:GetChildren()) do
+            scanRecursive(child, currentDepth + 1)
+        end
+    end
+    
+    -- Scan all ScreenGuis
+    for _, screenGui in ipairs(playerGui:GetChildren()) do
+        if screenGui:IsA("ScreenGui") then
+            scanRecursive(screenGui, 0)
+        end
+    end
+    
+    -- Sort by confidence
+    table.sort(candidates, function(a, b)
+        return a.Confidence > b.Confidence
+    end)
+    
+    return candidates
+end
+
+function CanvasDetector.ScanWorkspaceForCanvas()
+    -- Some games use SurfaceGuis or BillboardGuis on parts
+    local candidates = {}
+    
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("SurfaceGui") or obj:IsA("BillboardGui") then
+            local adornee = obj.Adornee or obj.Parent
+            if adornee and adornee:IsA("BasePart") then
+                local size = adornee.Size
+                if size.X >= 5 and size.Y >= 5 then
+                    local result = {}
+                    for k, v in pairs(DataModels.CanvasResult) do result[k] = v end
+                    result.Found = true
+                    result.Instance = obj
+                    result.Path = obj:GetFullName()
+                    result.Name = obj.Name
+                    result.AbsoluteSize = Vector2.new(size.X * 50, size.Y * 50) -- rough estimate
+                    result.ClassName = obj.ClassName
+                    result.Confidence = 50
+                    result.CanvasType = "3d_surface"
+                    result.DetectionMethod = "workspace_surface"
+                    table.insert(candidates, result)
+                end
+            end
+        end
+    end
+    
+    return candidates
+end
+
+function CanvasDetector.GetBestCanvas()
+    local allCandidates = {}
+    
+    -- Scan PlayerGui
+    local player = game:GetService("Players").LocalPlayer
+    if player and player:FindFirstChild("PlayerGui") then
+        local guiCandidates = CanvasDetector.ScanPlayerGui(player.PlayerGui)
+        for _, c in ipairs(guiCandidates) do
+            table.insert(allCandidates, c)
+        end
+    end
+    
+    -- Scan Workspace
+    local wsCandidates = CanvasDetector.ScanWorkspaceForCanvas()
+    for _, c in ipairs(wsCandidates) do
+        table.insert(allCandidates, c)
+    end
+    
+    -- Sort by confidence
+    table.sort(allCandidates, function(a, b)
+        return a.Confidence > b.Confidence
+    end)
+    
+    CanvasDetector.Results = allCandidates
+    CanvasDetector.BestCandidate = allCandidates[1]
+    
+    return allCandidates
+end
+
+--══════════════════════════════════════════════════════════════════════════════
+-- SECTION 4: INPUT/OUTPUT HANDLER — REMOTE EVENT INTERCEPTION
+--══════════════════════════════════════════════════════════════════════════════
+
+local RemoteInterceptor = {}
+RemoteInterceptor.HookedRemotes = {}
+RemoteInterceptor.CaptureLog = {}
+RemoteInterceptor.DrawingRemotes = {}
+RemoteInterceptor.RateTracker = {}
+
+function RemoteInterceptor.IsDrawingRelated(name)
+    name = name:lower()
+    for _, pattern in ipairs(ConfigManager.Settings.DRAWING_REMOTE_PATTERNS) do
+        if name:find(pattern:lower()) then
+            return true, pattern
+        end
+    end
+    return false, nil
+end
+
+function RemoteInterceptor.HashArgs(args)
+    local parts = {}
+    for i, arg in ipairs(args) do
+        table.insert(parts, tostring(typeof(arg)) .. ":" .. tostring(arg):sub(1, 50))
+    end
+    return table.concat(parts, "|")
+end
+
+function RemoteInterceptor.DeepInspect(value, depth, maxDepth)
+    depth = depth or 0
+    maxDepth = maxDepth or ConfigManager.Settings.MAX_ARGUMENT_DEPTH
+    if depth > maxDepth then return {__type = typeof(value), __truncated = true} end
+    
+    local t = typeof(value)
+    
+    if t == "nil" or t == "boolean" or t == "number" or t == "string" then
+        return value
+    elseif t == "Vector2" then
+        return {X = value.X, Y = value.Y, __type = "Vector2"}
+    elseif t == "Vector3" then
+        return {X = value.X, Y = value.Y, Z = value.Z, __type = "Vector3"}
+    elseif t == "Color3" then
+        return {
+            R = value.R, G = value.G, B = value.B,
+            Hex = string.format("#%02X%02X%02X", math.floor(value.R*255), math.floor(value.G*255), math.floor(value.B*255)),
+            __type = "Color3"
+        }
+    elseif t == "CFrame" then
+        local pos = value.Position
+        return {Position = {X = pos.X, Y = pos.Y, Z = pos.Z}, __type = "CFrame"}
+    elseif t == "EnumItem" then
+        return {EnumType = tostring(value.EnumType), Name = value.Name, Value = value.Value, __type = "EnumItem"}
+    elseif t == "Instance" then
+        return {ClassName = value.ClassName, Name = value.Name, Path = value:GetFullName(), __type = "Instance"}
+    elseif t == "table" then
+        local result = {__type = "table", __len = #value}
+        local count = 0
+        for k, v in pairs(value) do
+            count = count + 1
+            if count > 50 then
+                result.__truncated = true
+                break
+            end
+            local key = typeof(k) == "string" and k or tostring(k)
+            result[key] = RemoteInterceptor.DeepInspect(v, depth + 1, maxDepth)
+        end
+        return result
+    elseif t == "buffer" then
+        local len = buffer.len(value)
+        local bytes = {}
+        for i = 0, math.min(len - 1, 16) do
+            table.insert(bytes, string.format("%02X", buffer.readu8(value, i)))
+        end
+        return {
+            __type = "buffer",
+            Length = len,
+            Preview = table.concat(bytes, " ") .. (len > 16 and "..." or ""),
+            __raw = "[buffer data]"
+        }
+    else
+        return {__type = t, __value = tostring(value):sub(1, 100)}
+    end
+end
+
+function RemoteInterceptor.ClassifyStroke(args)
+    -- Analyze arguments to determine stroke type
+    local analysis = {}
+    for k, v in pairs(DataModels.StrokeAnalysis) do analysis[k] = v end
+    
+    -- Look for point data
+    local points = {}
+    local color = nil
+    local thickness = nil
+    local transparency = nil
+    
+    for _, arg in ipairs(args) do
+        local t = typeof(arg)
+        if t == "Vector2" or t == "Vector3" then
+            table.insert(points, {X = arg.X, Y = arg.Y})
+        elseif t == "Color3" then
+            color = {R = arg.R, G = arg.G, B = arg.B, Hex = string.format("#%02X%02X%02X", math.floor(arg.R*255), math.floor(arg.G*255), math.floor(arg.B*255))}
+        elseif t == "number" then
+            if not thickness and arg > 0 and arg < 100 then
+                thickness = arg
+            elseif not transparency and arg >= 0 and arg <= 1 then
+                transparency = arg
+            end
+        elseif t == "table" then
+            -- Check if table contains points
+            for k2, v2 in pairs(arg) do
+                if typeof(v2) == "Vector2" then
+                    table.insert(points, {X = v2.X, Y = v2.Y})
+                elseif typeof(v2) == "Color3" then
+                    color = {R = v2.R, G = v2.G, B = v2.B}
+                end
+            end
+        elseif t == "buffer" then
+            analysis.StrokeType = "buffer"
+            analysis.PointCount = buffer.len(arg)
+            return analysis
+        end
+    end
+    
+    analysis.Points = points
+    analysis.PointCount = #points
+    analysis.Color = color
+    analysis.Thickness = thickness or 1
+    analysis.Transparency = transparency or 0
+    
+    if #points == 0 then
+        analysis.StrokeType = "unknown"
+    elseif #points == 1 then
+        analysis.StrokeType = "pixel"
+        analysis.StartPoint = points[1]
+        analysis.EndPoint = points[1]
+    elseif #points == 2 then
+        analysis.StrokeType = "straight_line"
+        analysis.StartPoint = points[1]
+        analysis.EndPoint = points[2]
+    else
+        analysis.StrokeType = "curve"
+        analysis.StartPoint = points[1]
+        analysis.EndPoint = points[#points]
+    end
+    
+    return analysis
+end
+
+function RemoteInterceptor.HookRemote(remote)
+    if not remote or not remote:IsA("RemoteEvent") then return end
+    if RemoteInterceptor.HookedRemotes[remote] then return end
+    
+    local name = remote.Name
+    local path = remote:GetFullName()
+    local isDrawing, pattern = RemoteInterceptor.IsDrawingRelated(name)
+    
+    RemoteInterceptor.HookedRemotes[remote] = {
+        Name = name,
+        Path = path,
+        IsDrawingRelated = isDrawing,
+        Pattern = pattern,
+        FireCount = 0,
+        FirstFire = 0,
+        LastFire = 0,
+        Captures = {}
+    }
+    
+    -- Hook FireServer
+    local oldFireServer = remote.FireServer
+    remote.FireServer = function(self, ...)
+        local args = {...}
+        local timestamp = tick()
+        local capture = {}
+        for k, v in pairs(DataModels.RemoteCapture) do capture[k] = v end
+        
+        capture.Timestamp = timestamp
+        capture.RemotePath = path
+        capture.RemoteName = name
+        capture.EventType = "FireServer"
+        capture.Arguments = RemoteInterceptor.DeepInspect(args)
+        capture.ArgumentCount = #args
+        capture.ArgumentTypes = {}
+        for i, arg in ipairs(args) do
+            capture.ArgumentTypes[i] = typeof(arg)
+        end
+        capture.IsDrawingRelated = isDrawing
+        capture.FireCount = (RemoteInterceptor.HookedRemotes[remote].FireCount or 0) + 1
+        
+        if isDrawing then
+            capture.DrawingClassification = RemoteInterceptor.ClassifyStroke(args).StrokeType
+        end
+        
+        -- Rate tracking
+        RemoteInterceptor.HookedRemotes[remote].FireCount = capture.FireCount
+        if RemoteInterceptor.HookedRemotes[remote].FirstFire == 0 then
+            RemoteInterceptor.HookedRemotes[remote].FirstFire = timestamp
+        end
+        RemoteInterceptor.HookedRemotes[remote].LastFire = timestamp
+        
+        table.insert(RemoteInterceptor.CaptureLog, capture)
+        
+        -- Limit log size
+        if #RemoteInterceptor.CaptureLog > 1000 then
+            table.remove(RemoteInterceptor.CaptureLog, 1)
+        end
+        
+        -- Store in drawing remotes if relevant
+        if isDrawing then
+            if not RemoteInterceptor.DrawingRemotes[path] then
+                RemoteInterceptor.DrawingRemotes[path] = {
+                    Name = name,
+                    Path = path,
+                    Captures = {},
+                    FireCount = 0
+                }
+            end
+            table.insert(RemoteInterceptor.DrawingRemotes[path].Captures, capture)
+            RemoteInterceptor.DrawingRemotes[path].FireCount = RemoteInterceptor.DrawingRemotes[path].FireCount + 1
+        end
+        
+        -- Update rate tracker
+        if not RemoteInterceptor.RateTracker[path] then
+            RemoteInterceptor.RateTracker[path] = {
+                Fires = {},
+                Count = 0
+            }
+        end
+        table.insert(RemoteInterceptor.RateTracker[path].Fires, timestamp)
+        RemoteInterceptor.RateTracker[path].Count = RemoteInterceptor.RateTracker[path].Count + 1
+        
+        -- Trim old fires
+        local cutoff = timestamp - 10
+        while #RemoteInterceptor.RateTracker[path].Fires > 0 and 
+              RemoteInterceptor.RateTracker[path].Fires[1] < cutoff do
+            table.remove(RemoteInterceptor.RateTracker[path].Fires, 1)
+        end
+        
+        return oldFireServer(self, ...)
+    end
+    
+    -- Hook OnClientEvent if getconnections is available
+    pcall(function()
+        if getconnections then
+            local conns = getconnections(remote.OnClientEvent)
+            for _, conn in ipairs(conns) do
+                local oldFunc = conn.Function
+                if oldFunc and typeof(oldFunc) == "function" then
+                    conn.Function = function(...)
+                        local args = {...}
+                        local timestamp = tick()
+                        local capture = {}
+                        for k, v in pairs(DataModels.RemoteCapture) do capture[k] = v end
+                        
+                        capture.Timestamp = timestamp
+                        capture.RemotePath = path
+                        capture.RemoteName = name
+                        capture.EventType = "OnClientEvent"
+                        capture.Arguments = RemoteInterceptor.DeepInspect(args)
+                        capture.ArgumentCount = #args
+                        capture.IsDrawingRelated = isDrawing
+                        
+                        table.insert(RemoteInterceptor.CaptureLog, capture)
+                        
+                        return oldFunc(...)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+function RemoteInterceptor.ScanAndHookRemotes()
+    local rs = game:GetService("ReplicatedStorage")
+    
+    local function scanFolder(folder, depth)
+        if depth > 5 then return end
+        for _, child in ipairs(folder:GetChildren()) do
+            if child:IsA("RemoteEvent") or child:IsA("UnreliableRemoteEvent") then
+                RemoteInterceptor.HookRemote(child)
+            elseif child:IsA("Folder") or child:IsA("Model") then
+                scanFolder(child, depth + 1)
+            end
+        end
+    end
+    
+    scanFolder(rs, 0)
+    
+    -- Also check RobloxReplicatedStorage
+    pcall(function()
+        local rrs = game:GetService("RobloxReplicatedStorage")
+        scanFolder(rrs, 0)
+    end)
+end
+
+function RemoteInterceptor.GetRateAnalysis(remotePath)
+    local tracker = RemoteInterceptor.RateTracker[remotePath]
+    if not tracker or #tracker.Fires < 2 then
+        return {
+            RemoteName = remotePath,
+            FireCount = tracker and tracker.Count or 0,
+            TimeSpan = 0,
+            AverageRate = 0,
+            PeakRate = 0,
+            CooldownDetected = false,
+            CooldownDuration = 0
+        }
+    end
+    
+    local fires = tracker.Fires
+    local timeSpan = fires[#fires] - fires[1]
+    local avgRate = timeSpan > 0 and (#fires / timeSpan) or 0
+    
+    -- Calculate peak rate using 1-second windows
+    local peakRate = 0
+    for i = 1, #fires do
+        local windowStart = fires[i]
+        local windowCount = 0
+        for j = i, #fires do
+            if fires[j] <= windowStart + 1 then
+                windowCount = windowCount + 1
+            else
+                break
+            end
+        end
+        peakRate = math.max(peakRate, windowCount)
+    end
+    
+    -- Detect cooldown patterns
+    local cooldownDetected = false
+    local cooldownDuration = 0
+    if #fires >= 3 then
+        local gaps = {}
+        for i = 2, #fires do
+            table.insert(gaps, fires[i] - fires[i-1])
+        end
+        table.sort(gaps)
+        local medianGap = gaps[math.floor(#gaps / 2)]
+        if medianGap > 0.1 then
+            cooldownDetected = true
+            cooldownDuration = medianGap
+        end
+    end
+    
+    local analysis = {}
+    for k, v in pairs(DataModels.RateAnalysis) do analysis[k] = v end
+    analysis.RemoteName = remotePath
+    analysis.FireCount = tracker.Count
+    analysis.TimeSpan = timeSpan
+    analysis.AverageRate = avgRate
+    analysis.PeakRate = peakRate
+    analysis.CooldownDetected = cooldownDetected
+    analysis.CooldownDuration = cooldownDuration
+    analysis.LastFireTime = fires[#fires]
+    analysis.FireHistory = fires
+    
+    return analysis
+end
+
+--══════════════════════════════════════════════════════════════════════════════
+-- SECTION 5: COLOR PALETTE DETECTOR
+--══════════════════════════════════════════════════════════════════════════════
+
+local ColorDetector = {}
+ColorDetector.Palettes = {}
+
+function ColorDetector.ExtractColorFromInstance(instance)
+    local colors = {}
+    
+    if instance:IsA("GuiObject") then
+        if instance.BackgroundColor3 then
+            table.insert(colors, instance.BackgroundColor3)
+        end
+        if instance:IsA("TextLabel") or instance:IsA("TextButton") or instance:IsA("TextBox") then
+            if instance.TextColor3 then
+                table.insert(colors, instance.TextColor3)
+            end
+        end
+        if instance:IsA("ImageLabel") or instance:IsA("ImageButton") then
+            if instance.ImageColor3 then
+                table.insert(colors, instance.ImageColor3)
+            end
+        end
+    end
+    
+    if instance:IsA("UIStroke") and instance.Color then
+        table.insert(colors, instance.Color)
+    end
+    
+    if instance:IsA("UIGradient") then
+        for _, colorKeypoint in ipairs(instance.Color.Keypoints) do
+            table.insert(colors, colorKeypoint.Value)
+        end
+    end
+    
+    return colors
+end
+
+function ColorDetector.ScanForPalettes()
+    local palettes = {}
+    local player = game:GetService("Players").LocalPlayer
+    if not player or not player:FindFirstChild("PlayerGui") then return palettes end
+    
+    local function scanInstance(instance, depth)
+        if depth > 8 then return end
+        
+        local name = instance.Name:lower()
+        local isPalette = false
+        
+        -- Check name patterns
+        if name:find("color") or name:find("palette") or name:find("picker") or
+           name:find("swatch") or name:find("paint") or name:find("brush") then
+            isPalette = true
+        end
+        
+        -- Check if it's a container with many colored children
+        local coloredChildren = 0
+        local childColors = {}
+        for _, child in ipairs(instance:GetChildren()) do
+            local childColors2 = ColorDetector.ExtractColorFromInstance(child)
+            for _, c in ipairs(childColors2) do
+                coloredChildren = coloredChildren + 1
+                table.insert(childColors, c)
+            end
+            -- Recurse for grandchildren
+            if child:IsA("GuiObject") then
+                for _, grandchild in ipairs(child:GetChildren()) do
+                    if grandchild:IsA("GuiObject") then
+                        local gcColors = ColorDetector.ExtractColorFromInstance(grandchild)
+                        for _, c in ipairs(gcColors) do
+                            coloredChildren = coloredChildren + 1
+                            table.insert(childColors, c)
+                        end
+                    end
+                end
+            end
+        end
+        
+        if coloredChildren >= 3 then
+            isPalette = true
+        end
+        
+        if isPalette and coloredChildren > 0 then
+            -- Deduplicate colors
+            local uniqueColors = {}
+            local seen = {}
+            for _, color in ipairs(childColors) do
+                local key = string.format("%d,%d,%d", math.floor(color.R*255), math.floor(color.G*255), math.floor(color.B*255))
+                if not seen[key] then
+                    seen[key] = true
+                    table.insert(uniqueColors, color)
+                end
+            end
+            
+            if #uniqueColors >= 2 then
+                local palette = {}
+                for k, v in pairs(DataModels.ColorPalette) do palette[k] = v end
+                palette.Found = true
+                palette.Path = instance:GetFullName()
+                palette.Name = instance.Name
+                palette.ColorCount = #uniqueColors
+                palette.Colors = uniqueColors
+                palette.Format = "Color3"
+                
+                -- Determine selection method
+                local hasClickable = false
+                for _, child in ipairs(instance:GetChildren()) do
+                    if child:IsA("TextButton") or child:IsA("ImageButton") then
+                        hasClickable = true
+                        break
+                    end
+                end
+                palette.SelectionMethod = hasClickable and "click" or "property"
+                
+                -- Get samples
+                for i = 1, math.min(10, #uniqueColors) do
+                    local c = uniqueColors[i]
+                    table.insert(palette.Samples, {
+                        R = c.R, G = c.G, B = c.B,
+                        Hex = string.format("#%02X%02X%02X", math.floor(c.R*255), math.floor(c.G*255), math.floor(c.B*255))
+                    })
+                end
+                
+                table.insert(palettes, palette)
+            end
+        end
+        
+        -- Continue scanning children
+        for _, child in ipairs(instance:GetChildren()) do
+            if child:IsA("GuiObject") or child:IsA("Folder") or child:IsA("Frame") then
+                scanInstance(child, depth + 1)
+            end
+        end
+    end
+    
+    for _, screenGui in ipairs(player.PlayerGui:GetChildren()) do
+        if screenGui:IsA("ScreenGui") then
+            scanInstance(screenGui, 0)
+        end
+    end
+    
+    ColorDetector.Palettes = palettes
+    return palettes
+end
+
+--══════════════════════════════════════════════════════════════════════════════
+-- SECTION 6: COORDINATE SYSTEM ANALYZER
+--══════════════════════════════════════════════════════════════════════════════
+
+local CoordinateAnalyzer = {}
+CoordinateAnalyzer.Analysis = {}
+
+function CoordinateAnalyzer.AnalyzeCoordinates(canvasResult, strokeData)
+    local analysis = {
+        CanvasSize = canvasResult and canvasResult.AbsoluteSize or Vector2.new(0, 0),
+        CoordinateSystem = "unknown",
+        CoordinateOrigin = "unknown",
+        IsNormalized = false,
+        IsPixel = false,
+        IsWorld = false,
+        BoundsCheck = {},
+        ScaleFactor = 1,
+        Offset = Vector2.new(0, 0)
+    }
+    
+    if not strokeData or not strokeData.Points or #strokeData.Points == 0 then
+        return analysis
+    end
+    
+    local points = strokeData.Points
+    local canvasSize = analysis.CanvasSize
+    
+    -- Check if coordinates are normalized (0-1 range)
+    local allNormalized = true
+    local allPixel = true
+    local allWorld = true
+    
+    for _, point in ipairs(points) do
+        local x, y = point.X, point.Y
+        
+        -- Normalized check
+        if x < 0 or x > 1 or y < 0 or y > 1 then
+            allNormalized = false
+        end
+        
+        -- Pixel check (relative to canvas)
+        if canvasSize.X > 0 and canvasSize.Y > 0 then
+            if x > canvasSize.X * 1.5 or y > canvasSize.Y * 1.5 then
+                allPixel = false
+            end
+        end
+        
+        -- World check (large values)
+        if math.abs(x) < 100 and math.abs(y) < 100 then
+            allWorld = false
+        end
+    end
+    
+    if allNormalized then
+        analysis.CoordinateSystem = "normalized"
+        analysis.IsNormalized = true
+        analysis.CoordinateOrigin = "top_left"
+        analysis.ScaleFactor = canvasSize.X > 0 and canvasSize.X or 1
+    elseif allPixel then
+        analysis.CoordinateSystem = "pixel"
+        analysis.IsPixel = true
+        analysis.CoordinateOrigin = "top_left"
+        analysis.ScaleFactor = 1
+    elseif allWorld then
+        analysis.CoordinateSystem = "world"
+        analysis.IsWorld = true
+        analysis.CoordinateOrigin = "world"
+    else
+        analysis.CoordinateSystem = "mixed"
+    end
+    
+    -- Bounds check
+    if canvasSize.X > 0 and canvasSize.Y > 0 then
+        for i, point in ipairs(points) do
+            local inBounds = false
+            if analysis.IsNormalized then
+                inBounds = point.X >= 0 and point.X <= 1 and point.Y >= 0 and point.Y <= 1
+            elseif analysis.IsPixel then
+                inBounds = point.X >= 0 and point.X <= canvasSize.X and point.Y >= 0 and point.Y <= canvasSize.Y
+            end
+            analysis.BoundsCheck[i] = {
+                Point = point,
+                InBounds = inBounds,
+                DistanceFromEdge = 0
+            }
+        end
+    end
+    
+    return analysis
+end
+
+--══════════════════════════════════════════════════════════════════════════════
+-- SECTION 7: ANTI-CHEAT DETECTOR
+--══════════════════════════════════════════════════════════════════════════════
+
+local AntiCheatDetector = {}
+AntiCheatDetector.Findings = {}
+
+function AntiCheatDetector.ScanScripts()
+    local findings = {}
+    
+    local function scanScript(script)
+        if not script:IsA("LocalScript") and not script:IsA("ModuleScript") then return end
+        
+        local name = script.Name:lower()
+        local source = ""
+        pcall(function()
+            source = decompile and decompile(script) or ""
+        end)
+        
+        for _, pattern in ipairs(ConfigManager.Settings.ANTICHEAT_PATTERNS) do
+            if name:find(pattern:lower()) then
+                local finding = {}
+                for k, v in pairs(DataModels.AntiCheatEntry) do finding[k] = v end
+                finding.ScriptPath = script:GetFullName()
+                finding.ScriptName = script.Name
+                finding.DetectionType = pattern
+                finding.Severity = "high"
+                finding.Details = {NameMatch = pattern}
+                finding.CodeSnippet = source:sub(1, 500)
+                table.insert(findings, finding)
+            end
+        end
+        
+        -- Check source code if available
+        if source and source ~= "" then
+            local suspiciousPatterns = {
+                "mouse", "position", "validate", "check", "rate", "limit",
+                "heartbeat", "renderstepped", "stepped", "tick", "os.clock"
+            }
+            for _, sp in ipairs(suspiciousPatterns) do
+                if source:lower():find(sp) then
+                    local alreadyFound = false
+                    for _, f in ipairs(findings) do
+                        if f.ScriptPath == script:GetFullName() then
+                            alreadyFound = true
+                            break
+                        end
+                    end
+                    if not alreadyFound then
+                        local finding = {}
+                        for k, v in pairs(DataModels.AntiCheatEntry) do finding[k] = v end
+                        finding.ScriptPath = script:GetFullName()
+                        finding.ScriptName = script.Name
+                        finding.DetectionType = "source_pattern:" .. sp
+                        finding.Severity = "medium"
+                        finding.Details = {Pattern = sp}
+                        finding.CodeSnippet = source:sub(1, 500)
+                        table.insert(findings, finding)
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Scan PlayerScripts
+    local player = game:GetService("Players").LocalPlayer
+    if player and player:FindFirstChild("PlayerScripts") then
+        for _, script in ipairs(player.PlayerScripts:GetDescendants()) do
+            if script:IsA("LocalScript") or script:IsA("ModuleScript") then
+                scanScript(script)
+            end
+        end
+    end
+    
+    -- Scan ReplicatedStorage modules
+    local rs = game:GetService("ReplicatedStorage")
+    for _, script in ipairs(rs:GetDescendants()) do
+        if script:IsA("ModuleScript") then
+            scanScript(script)
+        end
+    end
+    
+    AntiCheatDetector.Findings = findings
+    return findings
+end
+
+--══════════════════════════════════════════════════════════════════════════════
+-- SECTION 8: LOGGING & DIAGNOSTICS MODULE
+--══════════════════════════════════════════════════════════════════════════════
+
+local Logger = {}
+Logger.Logs = {}
+Logger.MaxLogs = 500
+
+function Logger.Log(category, message, data)
+    local entry = {
+        Timestamp = tick(),
+        Category = category,
+        Message = message,
+        Data = data
+    }
+    
+    table.insert(Logger.Logs, entry)
+    
+    if #Logger.Logs > Logger.MaxLogs then
+        table.remove(Logger.Logs, 1)
+    end
+    
+    if ConfigManager.Settings.LOG_TO_CONSOLE then
+        local prefix = string.format("[%-8s] %s", category, message)
+        print(prefix)
+        if data then
+            print("  ->", ConfigManager.ToJSON(data, 0, 0):sub(1, 200))
+        end
+    end
+end
+
+function Logger.GetLogs(category, limit)
+    limit = limit or 50
+    local filtered = {}
+    for i = #Logger.Logs, 1, -1 do
+        if not category or Logger.Logs[i].Category == category then
+            table.insert(filtered, Logger.Logs[i])
+            if #filtered >= limit then break end
+        end
+    end
+    return filtered
+end
+
+--══════════════════════════════════════════════════════════════════════════════
+-- SECTION 9: REAL-TIME UI MODULE
+--══════════════════════════════════════════════════════════════════════════════
+
+local ScannerUI = {}
+ScannerUI.ScreenGui = nil
+ScannerUI.MainFrame = nil
+ScannerUI.IsVisible = true
+
+function ScannerUI.Create()
+    if ScannerUI.ScreenGui then return end
+    
+    local player = game:GetService("Players").LocalPlayer
+    if not player then return end
+    
+    local sg = Instance.new("ScreenGui")
+    sg.Name = "KirbyScannerUI"
+    sg.ResetOnSpawn = false
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    sg.Parent = player:WaitForChild("PlayerGui")
+    
+    local main = Instance.new("Frame")
+    main.Name = "MainPanel"
+    main.Size = ConfigManager.Settings.UI_SIZE
+    main.Position = ConfigManager.Settings.UI_POSITION
+    main.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+    main.BackgroundTransparency = 0.1
+    main.BorderSizePixel = 0
+    main.Parent = sg
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = main
+    
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(0, 255, 136)
+    stroke.Thickness = 1.5
+    stroke.Parent = main
+    
+    -- Title bar
+    local titleBar = Instance.new("Frame")
+    titleBar.Name = "TitleBar"
+    titleBar.Size = UDim2.new(1, 0, 0, 28)
+    titleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    titleBar.BorderSizePixel = 0
+    titleBar.Parent = main
+    
+    local titleCorner = Instance.new("UICorner")
+    titleCorner.CornerRadius = UDim.new(0, 8)
+    titleCorner.Parent = titleBar
+    
+    local titleText = Instance.new("TextLabel")
+    titleText.Name = "Title"
+    titleText.Size = UDim2.new(1, -60, 1, 0)
+    titleText.Position = UDim2.new(0, 10, 0, 0)
+    titleText.BackgroundTransparency = 1
+    titleText.Text = "🔍 KIRBY SCANNER v7.0"
+    titleText.TextColor3 = Color3.fromRGB(0, 255, 136)
+    titleText.TextSize = 14
+    titleText.Font = Enum.Font.GothamBold
+    titleText.TextXAlignment = Enum.TextXAlignment.Left
+    titleText.Parent = titleBar
+    
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Name = "CloseBtn"
+    closeBtn.Size = UDim2.new(0, 24, 0, 24)
+    closeBtn.Position = UDim2.new(1, -28, 0, 2)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(255, 60, 60)
+    closeBtn.Text = "×"
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.TextSize = 16
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.Parent = titleBar
+    
+    local closeCorner = Instance.new("UICorner")
+    closeCorner.CornerRadius = UDim.new(0, 4)
+    closeCorner.Parent = closeBtn
+    
+    closeBtn.MouseButton1Click:Connect(function()
+        ScannerUI.IsVisible = not ScannerUI.IsVisible
+        main.Visible = ScannerUI.IsVisible
+    end)
+    
+    -- Content area with scrolling
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Name = "Content"
+    scroll.Size = UDim2.new(1, -10, 1, -38)
+    scroll.Position = UDim2.new(0, 5, 0, 33)
+    scroll.BackgroundTransparency = 1
+    scroll.ScrollBarThickness = 4
+    scroll.ScrollBarImageColor3 = Color3.fromRGB(0, 255, 136)
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    scroll.Parent = main
+    
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 4)
+    layout.Parent = scroll
+    
+    ScannerUI.ScreenGui = sg
+    ScannerUI.MainFrame = main
+    ScannerUI.Content = scroll
+    
+    return sg
+end
+
+function ScannerUI.AddSection(title, color)
+    if not ScannerUI.Content then return nil end
+    
+    local section = Instance.new("Frame")
+    section.Name = title:gsub("%s+", "")
+    section.Size = UDim2.new(1, -4, 0, 0)
+    section.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+    section.BorderSizePixel = 0
+    section.AutomaticSize = Enum.AutomaticSize.Y
+    section.Parent = ScannerUI.Content
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = section
+    
+    local header = Instance.new("TextLabel")
+    header.Name = "Header"
+    header.Size = UDim2.new(1, 0, 0, 22)
+    header.BackgroundColor3 = color or Color3.fromRGB(0, 255, 136)
+    header.BackgroundTransparency = 0.8
+    header.Text = " " .. title
+    header.TextColor3 = color or Color3.fromRGB(0, 255, 136)
+    header.TextSize = 12
+    header.Font = Enum.Font.GothamBold
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.Parent = section
+    
+    local headerCorner = Instance.new("UICorner")
+    headerCorner.CornerRadius = UDim.new(0, 6)
+    headerCorner.Parent = header
+    
+    local body = Instance.new("Frame")
+    body.Name = "Body"
+    body.Size = UDim2.new(1, -8, 0, 0)
+    body.Position = UDim2.new(0, 4, 0, 26)
+    body.BackgroundTransparency = 1
+    body.AutomaticSize = Enum.AutomaticSize.Y
+    body.Parent = section
+    
+    local bodyLayout = Instance.new("UIListLayout")
+    bodyLayout.Padding = UDim.new(0, 2)
+    bodyLayout.Parent = body
+    
+    return {Section = section, Body = body, Header = header}
+end
+
+function ScannerUI.AddLine(parent, text, textColor)
+    if not parent then return end
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 0, 16)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.TextColor3 = textColor or Color3.fromRGB(200, 200, 210)
+    label.TextSize = 11
+    label.Font = Enum.Font.Code
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextWrapped = true
+    label.AutomaticSize = Enum.AutomaticSize.Y
+    label.Parent = parent
+    
+    return label
+end
+
+function ScannerUI.UpdateCanvasSection(canvasResults)
+    if not ScannerUI.Content then return end
+    
+    -- Find or create section
+    local section = ScannerUI.Content:FindFirstChild("Canvas")
+    if not section then
+        local s = ScannerUI.AddSection("📋 CANVAS", Color3.fromRGB(0, 200, 255))
+        section = s.Section
+        section.Name = "Canvas"
+    end
+    
+    local body = section:FindFirstChild("Body")
+    if not body then return end
+    
+    -- Clear old content
+    for _, child in ipairs(body:GetChildren()) do
+        if child:IsA("TextLabel") then child:Destroy() end
+    end
+    
+    if #canvasResults == 0 then
+        ScannerUI.AddLine(body, "  Scanning for canvas...", Color3.fromRGB(255, 180, 0))
+        return
+    end
+    
+    local best = canvasResults[1]
+    if best.Confidence <= 0 then
+        ScannerUI.AddLine(body, "  No valid canvas found yet...", Color3.fromRGB(255, 100, 100))
+        return
+    end
+    
+    ScannerUI.AddLine(body, string.format("  ✓ BEST: %s", best.Name), Color3.fromRGB(0, 255, 136))
+    ScannerUI.AddLine(body, string.format("    Path: %s", best.Path:sub(1, 50)), Color3.fromRGB(150, 150, 160))
+    ScannerUI.AddLine(body, string.format("    Size: %.0f x %.0f", best.AbsoluteSize.X, best.AbsoluteSize.Y))
+    ScannerUI.AddLine(body, string.format("    Confidence: %d%% | Type: %s", best.Confidence, best.CanvasType))
+    ScannerUI.AddLine(body, string.format("    Input: %s (conns: %d)", tostring(best.HasInputBegan), best.InputConnectionCount))
+    ScannerUI.AddLine(body, string.format("    Method: %s", best.DetectionMethod))
+    
+    if #canvasResults > 1 then
+        ScannerUI.AddLine(body, string.format("  └─ %d other candidates", #canvasResults - 1), Color3.fromRGB(120, 120, 130))
+    end
+end
+
+function ScannerUI.UpdateRemoteSection(drawingRemotes)
+    if not ScannerUI.Content then return end
+    
+    local section = ScannerUI.Content:FindFirstChild("Remotes")
+    if not section then
+        local s = ScannerUI.AddSection("📡 REMOTES", Color3.fromRGB(255, 200, 0))
+        section = s.Section
+        section.Name = "Remotes"
+    end
+    
+    local body = section:FindFirstChild("Body")
+    if not body then return end
+    
+    for _, child in ipairs(body:GetChildren()) do
+        if child:IsA("TextLabel") then child:Destroy() end
+    end
+    
+    local count = 0
+    for path, data in pairs(drawingRemotes) do
+        count = count + 1
+        ScannerUI.AddLine(body, string.format("  ⚡ %s", data.Name), Color3.fromRGB(255, 220, 80))
+        ScannerUI.AddLine(body, string.format("    Fires: %d | Captures: %d", data.FireCount, #data.Captures))
+        if #data.Captures > 0 then
+            local last = data.Captures[#data.Captures]
+            ScannerUI.AddLine(body, string.format("    Last: %s", last.DrawingClassification or "unknown"), Color3.fromRGB(180, 180, 190))
+        end
+        if count >= 5 then
+            ScannerUI.AddLine(body, "  ...", Color3.fromRGB(120, 120, 130))
+            break
+        end
+    end
+    
+    if count == 0 then
+        ScannerUI.AddLine(body, "  Waiting for drawing remotes...", Color3.fromRGB(255, 180, 0))
+    end
+end
+
+function ScannerUI.UpdateColorSection(palettes)
+    if not ScannerUI.Content then return end
+    
+    local section = ScannerUI.Content:FindFirstChild("Colors")
+    if not section then
+        local s = ScannerUI.AddSection("🎨 COLORS", Color3.fromRGB(255, 100, 200))
+        section = s.Section
+        section.Name = "Colors"
+    end
+    
+    local body = section:FindFirstChild("Body")
+    if not body then return end
+    
+    for _, child in ipairs(body:GetChildren()) do
+        if child:IsA("TextLabel") then child:Destroy() end
+    end
+    
+    if #palettes == 0 then
+        ScannerUI.AddLine(body, "  Scanning for palettes...", Color3.fromRGB(255, 180, 0))
+        return
+    end
+    
+    for i, palette in ipairs(palettes) do
+        ScannerUI.AddLine(body, string.format("  ✓ %s (%d colors)", palette.Name, palette.ColorCount), Color3.fromRGB(255, 150, 220))
+        local sampleStr = ""
+        for j, sample in ipairs(palette.Samples) do
+            sampleStr = sampleStr .. sample.Hex .. " "
+            if j >= 5 then break end
+        end
+        ScannerUI.AddLine(body, string.format("    Samples: %s", sampleStr))
+        if i >= 3 then break end
+    end
+end
+
+function ScannerUI.UpdateStatus(status, color)
+    if not ScannerUI.MainFrame then return end
+    local title = ScannerUI.MainFrame:FindFirstChild("TitleBar")
+    if not title then return end
+    local titleText = title:FindFirstChild("Title")
+    if titleText then
+        titleText.Text = "🔍 KIRBY SCANNER v7.0 | " .. status
+        if color then titleText.TextColor3 = color end
+    end
+end
+
+--══════════════════════════════════════════════════════════════════════════════
+-- SECTION 10: ERROR HANDLING & EDGE CASE MANAGEMENT
+--══════════════════════════════════════════════════════════════════════════════
+
+local ErrorHandler = {}
+
+function ErrorHandler.SafeCall(func, context)
+    local success, result = pcall(func)
+    if not success then
+        Logger.Log("ERROR", "Failed in " .. (context or "unknown"), {Error = tostring(result)})
+        return nil, result
+    end
+    return result, nil
+end
+
+function ErrorHandler.SafeHook(remote, hookFunc)
+    return ErrorHandler.SafeCall(function()
+        return hookFunc(remote)
+    end, "HookRemote:" .. remote.Name)
+end
+
+function ErrorHandler.ValidateCanvasResult(result)
+    if not result then return false end
+    if not result.Instance then return false end
+    if result.Confidence < 0 then return false end
+    if result.Instance.Parent == nil then return false end -- Destroyed
+    return true
+end
+
+function ErrorHandler.SanitizeString(str)
+    if not str then return "" end
+    return str:gsub("[\n\r\t]", " "):sub(1, 500)
+end
+
+--══════════════════════════════════════════════════════════════════════════════
+-- SECTION 11: MAIN ENTRY POINT / HOST SETUP
+--══════════════════════════════════════════════════════════════════════════════
+
+local Main = {}
+Main.IsRunning = false
+Main.ScanCycle = 0
+Main.LastExport = 0
+Main.CompleteReport = {}
+
+function Main.GenerateReport()
+    local report = {}
+    for k, v in pairs(DataModels.FullReport) do report[k] = v end
+    
+    report.ScanTimestamp = tick()
+    report.PlaceId = game.PlaceId
+    report.GameName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name or "Unknown"
+    
+    -- Canvas data
+    report.Canvas = {
+        BestCandidate = CanvasDetector.BestCandidate,
+        AllCandidates = CanvasDetector.Results,
+        CandidateCount = #CanvasDetector.Results
+    }
+    
+    -- Remote data
+    report.Remotes = {
+        HookedCount = 0,
+        DrawingRemotes = {},
+        AllCaptures = RemoteInterceptor.CaptureLog
+    }
+    for _, data in pairs(RemoteInterceptor.HookedRemotes) do
+        report.Remotes.HookedCount = report.Remotes.HookedCount + 1
+    end
+    for path, data in pairs(RemoteInterceptor.DrawingRemotes) do
+        report.Remotes.DrawingRemotes[path] = data
+    end
+    
+    -- Rate analysis
+    report.Rates = {}
+    for path, _ in pairs(RemoteInterceptor.RateTracker) do
+        table.insert(report.Rates, RemoteInterceptor.GetRateAnalysis(path))
+    end
+    
+    -- Colors
+    report.Colors = ColorDetector.Palettes
+    
+    -- Anti-cheat
+    report.AntiCheat = AntiCheatDetector.Findings
+    
+    -- Coordinate analysis (if we have canvas and strokes)
+    report.Coordinates = {}
+    if CanvasDetector.BestCandidate and CanvasDetector.BestCandidate.Found then
+        for _, capture in ipairs(RemoteInterceptor.CaptureLog) do
+            if capture.IsDrawingRelated and capture.DrawingClassification ~= "unknown" then
+                local stroke = RemoteInterceptor.ClassifyStroke(capture.Arguments)
+                local coordAnalysis = CoordinateAnalyzer.AnalyzeCoordinates(CanvasDetector.BestCandidate, stroke)
+                table.insert(report.Coordinates, coordAnalysis)
+                if #report.Coordinates >= 10 then break end
+            end
+        end
+    end
+    
+    -- Metadata
+    report.Metadata = {
+        ScannerVersion = "7.0",
+        ScanCycles = Main.ScanCycle,
+        Runtime = tick() - (Main.StartTime or tick()),
+        TotalCaptures = #RemoteInterceptor.CaptureLog,
+        PlayerName = game:GetService("Players").LocalPlayer and game:GetService("Players").LocalPlayer.Name or "Unknown"
+    }
+    
+    Main.CompleteReport = report
+    return report
+end
+
+function Main.ExportReport()
+    local report = Main.GenerateReport()
+    local json = ConfigManager.SerializeReport(report)
+    ConfigManager.CopyToClipboard(json)
+    Logger.Log("EXPORT", "Report exported to clipboard", {Size = #json})
+    return json
+end
+
+function Main.ScanCycle()
+    Main.ScanCycle = Main.ScanCycle + 1
+    
+    -- Canvas detection
+    ErrorHandler.SafeCall(function()
+        CanvasDetector.GetBestCanvas()
+    end, "CanvasScan")
+    
+    -- Remote hooking (continuous)
+    ErrorHandler.SafeCall(function()
+        RemoteInterceptor.ScanAndHookRemotes()
+    end, "RemoteScan")
+    
+    -- Color palette detection
+    ErrorHandler.SafeCall(function()
+        ColorDetector.ScanForPalettes()
+    end, "ColorScan")
+    
+    -- Anti-cheat scan (every 10 cycles)
+    if Main.ScanCycle % 10 == 1 then
+        ErrorHandler.SafeCall(function()
+            AntiCheatDetector.ScanScripts()
+        end, "ACScan")
+    end
+    
+    -- Update UI
+    if ConfigManager.Settings.UI_ENABLED then
+        ErrorHandler.SafeCall(function()
+            ScannerUI.UpdateCanvasSection(CanvasDetector.Results)
+            ScannerUI.UpdateRemoteSection(RemoteInterceptor.DrawingRemotes)
+            ScannerUI.UpdateColorSection(ColorDetector.Palettes)
+        end, "UIUpdate")
+    end
+    
+    -- Auto-export
+    if ConfigManager.Settings.AUTO_EXPORT_CLIPBOARD then
+        local now = tick()
+        if now - Main.LastExport >= ConfigManager.Settings.EXPORT_INTERVAL then
+            Main.LastExport = now
+            Main.ExportReport()
+        end
+    end
+    
+    -- Log progress
+    local canvasFound = CanvasDetector.BestCandidate and CanvasDetector.BestCandidate.Found
+    local remoteCount = 0
+    for _ in pairs(RemoteInterceptor.DrawingRemotes) do remoteCount = remoteCount + end
+    local colorFound = #ColorDetector.Palettes > 0
+    
+    Logger.Log("SCAN", string.format("Cycle %d | Canvas: %s | DrawingRemotes: %d | Palettes: %d | AC: %d",
+        Main.ScanCycle,
+        canvasFound and "✓" or "✗",
+        remoteCount,
+        #ColorDetector.Palettes,
+        #AntiCheatDetector.Findings
+    ))
+end
+
+function Main.Start()
+    if Main.IsRunning then return end
+    Main.IsRunning = true
+    Main.StartTime = tick()
+    
+    Logger.Log("SYSTEM", "KIRBY SCANNER v7.0 initializing...")
+    
+    -- Create UI
+    if ConfigManager.Settings.UI_ENABLED then
+        ErrorHandler.SafeCall(ScannerUI.Create, "CreateUI")
+    end
+    
+    -- Initial scans
+    Main.ScanCycle()
+    
+    -- Persistent scanning loop
+    task.spawn(function()
+        while Main.IsRunning do
+            task.wait(ConfigManager.Settings.SCAN_INTERVAL)
+            if not Main.IsRunning then break end
+            Main.ScanCycle()
+        end
+    end)
+    
+    -- Watch for new remotes
+    local rs = game:GetService("ReplicatedStorage")
+    rs.DescendantAdded:Connect(function(descendant)
+        if descendant:IsA("RemoteEvent") or descendant:IsA("UnreliableRemoteEvent") then
+            ErrorHandler.SafeCall(function()
+                RemoteInterceptor.HookRemote(descendant)
+                Logger.Log("REMOTE", "New remote detected and hooked: " .. descendant.Name)
+            end, "NewRemoteHook")
+        end
+    end)
+    
+    Logger.Log("SYSTEM", "Scanner active. Persistent monitoring enabled.")
+    print("\n")
+    print("╔══════════════════════════════════════════════════════════════════════
