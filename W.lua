@@ -1,0 +1,9029 @@
+--[[
+    KRAZZ.WIN PREMIUM EDITION [HARDENED] - PHANTOM SYNC v2.7.0
+    ARCH: ZERO-SIGNATURE ARCHITECTURE (YUB-X OPTIMIZED)
+    BEYOND DETECT: gethui() isolation + __namecall stealth.
+    COMBAT: 0ms Proximity Sync Engine (Lock-Free).
+]]--
+
+local game = (game or Game)
+local cloneref = (cloneref or function(v) return v end)
+
+--// Global Polyfills (YUB-X Optimization)
+local getgenv = (getgenv or function() return _G end)
+local math = (math or getgenv().math or _G.math)
+local string = (string or getgenv().string or _G.string)
+local table = (table or getgenv().table or _G.table)
+local task = (task or getgenv().task or _G.task)
+
+local function getService(name)
+    local success, service = pcall(function() return game:GetService(name) end)
+    if success and service then return cloneref(service) end
+    return nil
+end
+
+local function generateSecureID(prefix)
+    local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    local res = prefix or ""
+    for i = 1, 8 do
+        local rand = math.random(1, #chars)
+        res = res .. string.sub(chars, rand, rand)
+    end
+    return res
+end
+
+local SECURE_ID = generateSecureID("KZ_")
+local STEALTH_TAG = generateSecureID("ST_")
+
+local _K = {
+    H = "\x48\x75\x6d\x61\x6e\x6f\x69\x64",
+    HP = "\x48\x75\x6d\x61\x6e\x6f\x69\x64\x52\x6f\x6f\x74\x50\x61\x72\x74",
+    FS = "\x46\x69\x72\x65\x53\x65\x72\x76\x65\x72",
+    IS = "\x49\x6e\x76\x6f\x6b\x65\x53\x65\x72\x76\x65\x72",
+    HD = "\x48\x65\x61\x64"
+}
+
+-- for Cross-Thread Stability)
+getgenv().Players = getService("Players")
+getgenv().UIS = getService("UserInputService")
+getgenv().RunService = getService("RunService")
+getgenv().TweenService = getService("TweenService")
+getgenv().HttpService = getService("HttpService")
+getgenv().Debris = getService("Debris")
+getgenv().StarterGui = getService("StarterGui")
+
+getgenv().player = (Players.LocalPlayer or Players:FindFirstChildOfClass("Player") or player)
+pcall(function() if not player then local start = os.clock() while not Players.LocalPlayer and os.clock() - start < 3 do task.wait() end; getgenv().player = Players.LocalPlayer end end)
+getgenv().camera = workspace.CurrentCamera
+getgenv().mouse = player:GetMouse()
+
+-- LOCAL-FIRST ARCHITECTURE) ]]
+local state = {
+    config = {},
+    defaultConfig = {},
+    uiRegistry = {},
+    tabs = {},
+    tabButtons = {},
+    connections = {},
+    visSubTabs = {},
+    miscSubTabs = {},
+    victimHealths = {},
+    playerHealthMap = {},
+    hkLabels = {},
+    espObjects = {},
+    _hitNotifyActive = {},
+    _localHitRegister = {},
+    _KrazzTargetLock = nil,
+    _KrazzPriorityTarget = nil,
+    _KrazzLastShotAny = 0,
+    _KrazzLastSoundTime = 0,
+    _KrazzIsClicking = false,
+    _KrazzLastKillTime = 0,
+    aimbotEnabled = false,
+    Authenticated = false,
+    accounts = {}, -- Stores { [username] = password }
+    usedKeys = {}, -- Stores { [key] = true }
+    currentSilentTarget = nil,
+    activeModules = {"Enable Aimbot", "Enable Silent Aim", "Enable ESP", "Enable Triggerbot", "Enable AntiAim"},
+    isMobile = game:GetService("UserInputService").TouchEnabled, -- Robust mobile heuristic
+}
+
+-- [[ MOBILE AUTO-INIT ]]
+-- On mobile executors (Delta, Ronix) there is no MouseButton2 / keyboard.
+-- We permanently set _KrazzMobileAimLock so getAimbotKeyDown() always returns true,
+-- and force Aimbot Mode to "Always" so no key-hold is required.
+if state.isMobile then
+    getgenv()._KrazzMobileAimLock = true
+end
+
+-- locals)
+local config = state.config
+local defaultConfig = state.defaultConfig
+local connections = state.connections
+local victimHealths = state.victimHealths
+local espObjects = state.espObjects
+local _localHitRegister = state._localHitRegister
+local _hitNotifyActive = state._hitNotifyActive
+local tabs = state.tabs
+local tabButtons = state.tabButtons
+local uiRegistry = state.uiRegistry
+
+state.lastShadowUpdate = 0
+state._hatHue = 0
+
+local function getAvS2Health(character)
+    if not character then return 0 end
+    local hum = character:FindFirstChildOfClass("Humanoid")
+    if hum then return hum.Health end
+    local fakeH = character:FindFirstChild("FakeHealth")
+    if fakeH and fakeH:IsA("NumberValue") then return fakeH.Value end
+    return 100
+end
+
+local function getBestHealth(character)
+    local h1 = getAvS2Health(character)
+    if h1 > 0 then return h1 end
+    return 0
+end
+
+-- Redundant health monitor removed (Using high-level one below)
+
+--// Globalized Combat Helpers (Absolute Environment Presence)
+getgenv().isWithinCombatFocus = function(targetPos, radius)
+    local cam = workspace.CurrentCamera
+    if not cam then return false end
+    local vps = cam.ViewportSize
+    if not vps or vps.X < 1 then return false end
+    local pos, onS = cam:WorldToViewportPoint(targetPos)
+    if not onS then return false end
+    local screenCenter = Vector2.new(vps.X / 2, vps.Y / 2)
+    return (Vector2.new(pos.X, pos.Y) - screenCenter).Magnitude < (radius or 500)
+end
+
+getgenv().getRigParts = function(char)
+    if not char then return nil end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local rigType = hum and hum.RigType or Enum.HumanoidRigType.R15
+    local parts = {
+        Head = char:FindFirstChild("Head"),
+        Root = char:FindFirstChild("HumanoidRootPart"),
+        Torso = (rigType == Enum.HumanoidRigType.R15) and char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso"),
+        Body = (rigType == Enum.HumanoidRigType.R15) and (char:FindFirstChild("UpperTorso") or char:FindFirstChild("LowerTorso")) or char:FindFirstChild("Torso"),
+        Type = rigType
+    }
+    return parts
+end
+
+getgenv().getAvS2Health = function(char)
+    if not char then return nil end
+    local foundHP = nil
+    pcall(function()
+        local a = char:GetAttribute("Health") or char:GetAttribute("HP") or char:GetAttribute("CurrentHealth") or char:GetAttribute("HealthVal")
+        if a then foundHP = tonumber(a) end
+        if foundHP then return end
+        for _, v in ipairs(char:GetDescendants()) do
+            if (v:IsA("IntValue") or v:IsA("NumberValue")) then
+                local ln = string.lower(v.Name)
+                if string.find(ln, "health") or string.find(ln, "hp") then foundHP = v.Value; return end
+            end
+            local ok, val = pcall(function() return v.Health end)
+            if ok and typeof(val) == "number" then foundHP = val; return end
+        end
+    end)
+    if foundHP then return foundHP end
+    local hum = char:FindFirstChildOfClass("Humanoid") or char:FindFirstChildWhichIsA("Humanoid")
+    if hum then return hum.Health end
+    return nil
+end
+
+getgenv().getBestHealth = function(targetChar)
+    if not targetChar then return 0 end
+    local hum = targetChar:FindFirstChildOfClass("Humanoid")
+    if not hum then return 0 end
+    return getAvS2Health(targetChar) or hum:GetAttribute("Health") or hum.Health
+end
+
+-- // ATOMIC SHARED REGISTRY
+getgenv().tabs = getgenv().tabs or {}
+getgenv().tabButtons = getgenv().tabButtons or {}
+getgenv().uiRegistry = getgenv().uiRegistry or {}
+getgenv().visSubTabs = getgenv().visSubTabs or {}
+getgenv().miscSubTabs = getgenv().miscSubTabs or {}
+
+-- // COMPONENT HELPERS (NULL-SAFE)
+local function getAbsoluteY(obj)
+    local ok, res = pcall(function() return obj.AbsoluteContentSize.Y end)
+    return ok and res or 0
+end
+
+
+-- _KRAZZ_ABSOLUTE_FEEDBACK is defined BELOW at line ~846 (after KRAZZ_GLOBAL_HITMARK/DEATHGLOW are ready)
+-- placeholder so early references don't break:
+getgenv()._KRAZZ_ABSOLUTE_FEEDBACK = getgenv()._KRAZZ_ABSOLUTE_FEEDBACK or function() end
+getgenv()._KrazzForceTrigger = getgenv()._KRAZZ_ABSOLUTE_FEEDBACK
+getgenv()._KrazzForceFeedback = getgenv()._KRAZZ_ABSOLUTE_FEEDBACK
+
+--[[ TOP-LEVEL COMBAT STATE ]]
+getgenv().playerHealthMap = getgenv().playerHealthMap or {}
+getgenv().victimHealths = getgenv().victimHealths or {}
+getgenv().espObjects = getgenv().espObjects or {}
+getgenv()._hitNotifyActive = getgenv()._hitNotifyActive or {}
+getgenv()._KrazzLastSoundTime = 0
+getgenv()._KrazzLastKillTime = 0
+getgenv()._lastFired = 0
+getgenv().victimHealths = {}
+
+--[[ RIG COMPATIBILITY HELPER ]]
+
+
+--// ABSOLUTE RELIABILITY: Smart Hybrid Health Monitor (AvS2 Compatible)
+-- ifyActive
+
+local function monitorHealth(p)
+    if not p then return end
+    if p == player then
+--         local weapon fire tracking immediately and stop
+    local function hookMyTool(tool)
+            tool.Activated:Connect(function()
+                getgenv()._KrazzWeaponFiredAt = os.clock()
+                if tool.Name == "Revolver Knife" then
+                    getgenv().KrazzRevolverFiring = os.clock()
+                end
+            end)
+        end
+        player.CharacterAdded:Connect(function(newChar)
+            newChar.ChildAdded:Connect(function(child)
+                if child:IsA("Tool") then hookMyTool(child) end
+            end)
+        end)
+        if player.Character then
+            for _, ch in ipairs(player.Character:GetChildren()) do
+                if ch:IsA("Tool") then hookMyTool(ch) end
+            end
+        end
+        return 
+    end
+    local function connectChar(char)
+        if not char then return end
+        local hum = char:FindFirstChildWhichIsA("Humanoid")
+        if not hum then
+            task.spawn(function()
+                hum = char:WaitForChild("Humanoid", 10)
+                if hum then connectChar(char) end
+            end)
+            return
+        end
+        if not (hum and hum:IsA("Humanoid")) then return end
+        
+        -- Sync registries
+        getgenv()._hitNotifyActive = _hitNotifyActive
+        getgenv().uiRegistry = uiRegistry
+
+        local function snapHP()
+            local a = char:GetAttribute("Health") or char:GetAttribute("HP")
+            if a then return tonumber(a) end
+            local val = char:FindFirstChild("Health") or char:FindFirstChild("HP")
+            if val and (val:IsA("IntValue") or val:IsA("NumberValue")) then return val.Value end
+            return hum.Health
+        end
+        playerHealthMap[p] = snapHP()
+
+        local diedFired = false
+        local function onDied(savedChar)
+            if diedFired then return end
+            -- KILL DETECTION: explicit hook hit OR our weapon/mouse fired with accurate crosshair ray
+--             if target is close to our crosshair center
+    local lastHit = _localHitRegister[p] or 0
+            local weaponFiredAt = getgenv()._KrazzWeaponFiredAt or 0
+            local lastClick = getgenv()._KrazzLastClick or 0
+            local charPos = savedChar:GetPivot().Position
+            local dist = (camera.CFrame.Position - charPos).Magnitude
+            
+            local wasMyKill = false
+            -- Condition 1: Direct remote hit detection
+    if (os.clock() - lastHit < 3.0) then
+                wasMyKill = true
+            else
+--                 for projectile travel time)
+    if (os.clock() - weaponFiredAt < 4.0 or os.clock() - lastClick < 4.0) then
+                    -- Sub-condition A: Was it our explicitly tracked aimbot/silent aim target?
+    local cAim = _lastAimbotTarget and _lastAimbotTarget.Parent
+                    local cSilent = _sa_target and _sa_target.Parent
+                    local isTrackedAim = (cAim == savedChar) or (cSilent == savedChar) or (getgenv()._KrazzPriorityTarget == p)
+                    
+                    if isTrackedAim then
+                        wasMyKill = true
+                    elseif dist < 250 then
+                        -- Sub-condition B: Geometric Trajectory Tracking (Legit flick shots)
+    local orig = getgenv()._KrazzLastAimOrigin
+                        local dVec = getgenv()._KrazzLastAimDirection
+                        if orig and dVec then
+                            local v = charPos - orig
+                            local alongDist = v:Dot(dVec)
+                            if alongDist > 0 then
+                                local proj = orig + (dVec * alongDist)
+                                local offset = (charPos - proj).Magnitude
+                                -- If they died within 25 studs of our bullet's flight path
+    if offset < 25 and alongDist < 250 then
+                                    wasMyKill = true
+                                end
+                            end
+                        end
+                        -- Failsafe: Point blank range (Melee)
+    if dist < 25 then
+                            wasMyKill = true
+                        end
+                    end
+                end
+            end
+
+            if wasMyKill then
+                diedFired = true
+                -- AT DIRECTION: save Pitch, set None, auto-restore after 1.5s
+    if config["At Direction"] then
+                    local prevPitch = config["Pitch"]
+                    config["Pitch"] = "None"
+                    if uiRegistry["Pitch"] then pcall(function() uiRegistry["Pitch"]("None") end) end
+                    task.delay(1.5, function()
+                        if not _G.Unloaded and config["Pitch"] == "None" and prevPitch ~= "None" then
+                            config["Pitch"] = prevPitch
+                            if uiRegistry["Pitch"] then pcall(function() uiRegistry["Pitch"](prevPitch) end) end
+                        end
+                    end)
+                end
+                -- Set KrazzKill so At Direction isKillOverride triggers
+                getgenv().KrazzKill = os.clock()
+                _KRAZZ_ABSOLUTE_FEEDBACK(savedChar, true, playerHealthMap[p] or 100)
+            end
+        end
+
+        hum.Died:Connect(function() onDied(char) end)
+        local conn; conn = p.CharacterRemoving:Connect(function(removedChar)
+            if removedChar == char then onDied(char) end
+            if conn then conn:Disconnect() end
+        end)
+
+        hum.HealthChanged:Connect(function(h)
+            if not config["Hit Notifications"] then playerHealthMap[p] = h; return end
+            local last = playerHealthMap[p] or snapHP()
+            if h < last - 0.5 and h > 0 then
+                local dmg = math.floor(last - h)
+                if dmg > 0 and not _hitNotifyActive[p] then
+                    _hitNotifyActive[p] = true
+                    task.spawn(_KRAZZ_ABSOLUTE_FEEDBACK, char, false, dmg)
+                    task.delay(0.2, function() _hitNotifyActive[p] = false end)
+                end
+            end
+            playerHealthMap[p] = h
+        end)
+    end
+    p.CharacterAdded:Connect(connectChar)
+    if p.Character then task.spawn(connectChar, p.Character) end
+end
+
+-- for Cross-Thread Stability)
+Players = getService("Players")
+UIS = getService("UserInputService")
+RunService = getService("RunService")
+TweenService = getService("TweenService")
+HttpService = getService("HttpService")
+Lighting = game:GetService("Lighting")  --                         E                                       E
+player = (Players.LocalPlayer or Players:FindFirstChildOfClass("Player") or player)
+pcall(function() if not player then local start = os.clock() while not Players.LocalPlayer and os.clock() - start < 3 do task.wait() end; player = Players.LocalPlayer end end)
+camera = workspace.CurrentCamera
+mouse = player:GetMouse()
+
+--[[ INPUT TRACKER (PHANTOM SYNC) ]]
+function getMousePos()
+    local loc = UIS:GetMouseLocation()
+    return Vector2.new(loc.X, loc.Y)
+end
+
+mouse.Button1Down:Connect(function() getgenv()._KrazzIsClicking = true end)
+mouse.Button1Up:Connect(function() getgenv()._KrazzIsClicking = false end)
+
+--[[ STEALTH HOOKS (PHANTOM EDITION) ]]
+local mt = getrawmetatable(game)
+local old_ni = mt.__newindex
+local old_idx = mt.__index
+local old_nc = mt.__namecall
+setreadonly(mt, false)
+
+mt.__index = newcclosure(function(t, k)
+    if not _G.Unloaded and (k == "Name" or k == "name") then
+        local val = old_idx(t, k)
+        if typeof(val) == "string" and (val:find("Krazz") or val:find(SECURE_ID)) then
+            return "Folder" -- Mask identity
+    end
+    end
+    return old_idx(t, k)
+end)
+
+mt.__newindex = newcclosure(function(t, k, v)
+    if not _G.Unloaded and config and config["Enable AntiAim"] and (k == "AutoRotate" or k == "Focus") and v == true then 
+        return nil 
+    end
+    return old_ni(t, k, v)
+end)
+
+mt.__namecall = newcclosure(function(t, ...)
+    local args = {...}
+    local method = getnamecallmethod()
+    
+    if not _G.Unloaded then
+        -- 1. Detection Remote Blocking
+    local ln = string.lower(tostring(t))
+        if method == "FireServer" or method == "InvokeServer" then
+            if ln:find("detect") or ln:find("cheat") or ln:find("telemetry") or ln:find("kick") then
+                return nil
+            end
+        end
+        
+        -- 2. Scrutiny Filter (Hide script objects from GetChildren)
+    if method == "GetChildren" or method == "GetDescendants" or method == "get_children" then
+            local children = old_nc(t, ...)
+            local filtered = {}
+            for _, child in ipairs(children) do
+                local cn = tostring(child)
+                -- Only filter by name: do NOT use gethui() check here because our own UI
+                -- is also parented under gethui(), so that check would strip ALL internal
+                -- UI elements (breaking Yaw Settings kebab lookup, color pickers, etc.)
+                if not (cn:find("Krazz") or cn:find(SECURE_ID)) then
+                    table.insert(filtered, child)
+                end
+            end
+            return filtered
+        end
+    end
+    return old_nc(t, ...)
+end)
+setreadonly(mt, true)
+
+-- FORCEMENT (MAX PRIORITY) ]]
+RunService:BindToRenderStep(STEALTH_TAG, Enum.RenderPriority.Camera.Value + 100, function()
+    if _G.Unloaded then pcall(function() RunService:UnbindFromRenderStep(STEALTH_TAG) end) return end
+    if config and config["Enable AntiAim"] then
+        local char = player.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.AutoRotate = false end
+    end
+end)
+
+
+--[[ KRAZZ.WIN NUCLEAR CLEANUP ]]
+local function runCleanup()
+    _G.Unloaded = true
+    if _G.KrazzConnections then
+        for _, v in ipairs(_G.KrazzConnections) do pcall(function() v:Disconnect() end) end
+    end
+    local Lighting = game:GetService("Lighting")
+    local __Players = game:GetService("Players")
+
+    --[[ DISABLE ALL FEATURES IMMEDIATELY ON UNLOAD ]]
+    pcall(function()
+        -- Reset config toggles that have visual side-effects
+        config["Enable AntiAim"] = false
+        config["Enable Desync"] = false
+        config["Speed Strafe"] = false
+        config["Enable Noclip"] = false
+        config["Infinity Jump"] = false
+        config["Enable Self Chams"] = false
+        config["Enable Charm"] = false
+        config["Enable Bloom"] = false
+        config["Enable Depth Of Field (DOF)"] = false
+        config["Enable Sun Rays"] = false
+        config["Enable Motion Blur"] = false
+        config["Enable Color Correction"] = false
+        config["Enable Fog"] = false
+        config["Enable Rain"] = false
+        config["Enable Server Desync"] = false
+        config["Enable Shadow Clone"] = false
+        config["China Hat"] = false
+        config["Enable Orbit"] = false
+        config["Fake Lag"] = false
+        config["Third Person"] = false
+        config["Enable Jitter Trail"] = false
+    end)
+    
+    --[[ FULL LIGHTING RESTORE ]]
+    pcall(function()
+        Lighting.ClockTime = 14
+        Lighting.FogEnd = 100000; Lighting.FogStart = 0
+        Lighting.FogColor = Color3.fromRGB(191, 191, 191)
+        Lighting.Brightness = 2
+        Lighting.ExposureCompensation = 0
+        Lighting.Ambient = Color3.fromRGB(127, 127, 127)      -- Return to normal ambient
+        Lighting.OutdoorAmbient = Color3.fromRGB(127, 127, 127)
+        Lighting.GlobalShadows = true
+        -- Agresively remove ALL lighting instances that might cause tinted/glitched screen
+    for _, v in ipairs(Lighting:GetChildren()) do
+            if v:IsA("ColorCorrectionEffect") or v:IsA("BloomEffect") or v:IsA("DepthOfFieldEffect") or v:IsA("SunRaysEffect") or v:IsA("BlurEffect") or v:IsA("Atmosphere") or v:IsA("Sky") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        local lightL = Lighting:FindFirstChild("KrazzLightning")
+        if lightL then pcall(function() lightL:Destroy() end) end
+    end)
+
+    --[[ RESTORE ALL PLAYERS' CHARACTERS ]]
+    for plr, d in pairs(espObjects) do
+        local c = plr.Character
+        if c and d.originalProps then
+            for _p, props in pairs(d.originalProps) do
+                pcall(function()
+                    if _p:IsA("SurfaceAppearance") and props.Parent then
+                        _p.Parent = props.Parent
+                    elseif _p:IsA("BasePart") then
+                        if props.Material then _p.Material = props.Material else _p.Material = Enum.Material.Plastic end
+                        if props.Color then _p.Color = props.Color end
+                        if _p:IsA("MeshPart") and props.TextureID then _p.TextureID = props.TextureID end
+                    elseif (_p:IsA("Decal") or _p:IsA("Texture")) and props.Transparency then
+                        _p.Transparency = props.Transparency
+                    end
+                end)
+            end
+        end
+    end
+    for _, p in ipairs(__Players:GetPlayers()) do
+        local c = p.Character
+        if c then
+            -- 1. Agresively Destroy all Highlights (Charm/Glows) on character
+    for _, v in ipairs(c:GetDescendants()) do
+                if v:IsA("Highlight") then
+                    pcall(function() v.Adornee = nil; v.Enabled = false; v:Destroy() end)
+                end
+            end
+            -- 2. Restore clothing
+    local hc = c:FindFirstChild("KrazzHiddenClothes")
+            if hc then
+                for _, ch in ipairs(hc:GetChildren()) do pcall(function() ch.Parent = c end) end
+                pcall(function() hc:Destroy() end)
+            end
+        end
+    end
+    local kv = camera:FindFirstChild(SECURE_ID)
+    if kv then pcall(function() kv:Destroy() end) end
+    pcall(function()
+        local kv2 = workspace.CurrentCamera:FindFirstChild("KrazzVisuals")
+        if kv2 then kv2:Destroy() end
+        local kr = workspace.CurrentCamera:FindFirstChild("KrazzRain")
+        if kr then kr:Destroy() end
+    end)
+
+    -- Reset Camera
+    pcall(function()
+        local cam = workspace.CurrentCamera
+        if cam.CameraType == Enum.CameraType.Scriptable then
+            cam.CameraType = Enum.CameraType.Custom
+        end
+    end)
+    
+    -- LocalPlayer
+    local lp = __Players.LocalPlayer
+    if lp then
+        pcall(function() lp.CameraMode = Enum.CameraMode.Classic end)
+        pcall(function() lp.CameraMaxZoomDistance = 128 end)
+        pcall(function() lp.CameraMinZoomDistance = 0.5 end)
+        local lpChar = lp.Character
+        if lpChar then
+            local hum = lpChar:FindFirstChildOfClass("Humanoid")
+            if hum then
+                pcall(function() hum.AutoRotate = true end)
+                pcall(function() hum.WalkSpeed = 16 end)
+                pcall(function() hum.JumpPower = 50 end)
+            end
+        end
+    end
+
+    -- Cleanup UI
+    if KZLogo then pcall(function() KZLogo:Destroy() end) end
+    if hatPart then pcall(function() hatPart:Destroy() end) end
+    if mainGui then pcall(function() mainGui:Destroy() end) end
+    if gui then pcall(function() gui:Destroy() end) end
+    
+    -- Cleanup Drawing Objects
+    if FOVCircle then pcall(function() FOVCircle:Remove() end) end
+    if FOVFill then pcall(function() FOVFill:Remove() end) end
+    if SilentFOVCircle then pcall(function() SilentFOVCircle:Remove() end) end
+    if SilentFOVFill then pcall(function() SilentFOVFill:Remove() end) end
+    
+    pcall(function() game:GetService("RunService"):UnbindFromRenderStep("KrazzAimbot") end)
+    pcall(function() game:GetService("RunService"):UnbindFromRenderStep("KrazzLogoUpdate") end)
+    pcall(function() game:GetService("RunService"):UnbindFromRenderStep("KrazzSpectate") end)
+end
+
+if _G.KrazzCleanup then pcall(_G.KrazzCleanup) end
+_G.KrazzCleanup = runCleanup
+_G.Unloaded = false
+_G.KrazzConnections = {}
+local later
+connections = _G.KrazzConnections
+
+--[[ GLOBAL VISUAL OBJECTS ]]
+local previewBox = nil
+local pStrokePreview = nil
+local pOutlinePreview = nil
+local pSkeletonLines = {}
+local pHealth = nil
+local pName = nil
+local pDistance = nil
+local pHeadDot = nil
+local pCorners = {}
+local soulConnections = {}
+local deathMarkers = {}
+
+local radarGui = nil
+local radarFrame = nil
+local scObjects = {}
+local LocalTargetVelocity = Vector3.new(0,0,0)
+
+--[[ KRAZZ COMBAT TIMERS (Unique Global Scope) ]]
+getgenv().KrazzKill = 0
+getgenv().KrazzHit = 0
+
+local safe_properties = {
+    WalkSpeed = 16,
+    JumpPower = 50,
+    CFrame = CFrame.new(),
+    Velocity = Vector3.new(0, 0, 0)
+}
+
+--[[ MASK JITTER: Humanize legitimate looking values ]]
+local function getSafe(prop)
+    if prop == "WalkSpeed" then return 16 + (math.random(-5, 5) / 100) end
+    if prop == "JumpPower" then return 50 + (math.random(-5, 5) / 100) end
+    return safe_properties[prop]
+end
+
+local function is_blocked(obj, method)
+    if not obj or typeof(obj) ~= "Instance" then return false end
+    
+    --[[ LAYER 1: GAME SERVICE WHITELIST (CRITICAL FIX) ]]
+    -- We allow EVERYTHING from core services to prevent 'nil with Position' crashes.
+    local ok, isInternal = pcall(function()
+        return obj:IsDescendantOf(game:GetService("ReplicatedStorage")) or 
+               obj:IsDescendantOf(game:GetService("ReplicatedFirst")) or
+               obj:IsDescendantOf(game:GetService("CorePackages")) or
+               obj:IsDescendantOf(game:GetService("CoreGui"))
+    end)
+    if ok and isInternal then return false end
+
+    --[[ LAYER 2: NAME-BASED ALLOWLIST ]]
+    -- LAYER 1: Core Service Whitelist (Prevents 'AssetService is locked' crashes)
+    local className = ""
+    pcall(function() className = obj.ClassName end)
+    if className:find("Service") or className == "DataModel" then return false end
+
+    local ln = ""
+    pcall(function() ln = string.lower(obj.Name) end)
+    
+    -- LAYER 2: Tactical HUD & Data Whitelist
+    if ln:find("team") or ln:find("join") or ln:find("lobby") or ln:find("spawn") or ln:find("character") or ln:find("event") or ln:find("network") or ln:find("packet") or ln:find("signal") or ln:find("feed") or ln:find("kill") or ln:find("notif") or ln:find("hud") or ln:find("message") or ln:find("chat") or ln:find("update") or ln:find("data") or ln:find("get") or ln:find("set") or ln:find("pos") or ln:find("state") or ln:find("voice") or ln:find("init") or ln:find("load") or ln:find("request") or ln:find("remotefunction") or ln:find("select") or ln:find("play") or ln:find("match") or ln:find("game") then
+        return false
+    end
+
+    --[[ LAYER 3: AGGRESSIVE ANTI-CHEAT BLOCKLIST ]]
+    local ac_specific = {"detectcheat", "flagplayer", "anticheat", "banreport"}
+    for _, b in ipairs(ac_specific) do
+        if ln:find(b) then return true end
+    end
+    
+--     for FireServer (Telemetry)
+    if method == "FireServer" then
+        local telemetry = {"telemetry", "crashlog", "securityreport", "metrics"}
+        for _, b in ipairs(telemetry) do
+            if ln:find(b) then return true end
+        end
+    end
+    
+    return false
+end
+--[[ SMART CHARACTER HIDER & RIG SYNC (FPS Boost) ]]
+local function syncRig(char)
+    if not char then return end
+    local head = char:WaitForChild("Head", 5)
+    if not head then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+
+    -- Cache parts to avoid heavy GetDescendants() loop every single frame on Mobile (which causes severe lag/disconnects)
+    local rigParts = {}
+    local function addPart(v)
+        if v:IsA("BasePart") and v.Name ~= "HumanoidRootPart" then
+            local n = v.Name:lower()
+            -- Removed "fake" check here to stop hiding fake characters in games like AvS2 lobbies
+            local isVM = n:find("viewmodel") or n:find("fps")
+            table.insert(rigParts, {part = v, isVM = isVM})
+        end
+    end
+    for _, v in ipairs(char:GetDescendants()) do addPart(v) end
+    local addedConn = char.DescendantAdded:Connect(addPart)
+    table.insert(connections, addedConn)
+
+    local rigConn
+    rigConn = RunService.RenderStepped:Connect(function()
+        if _G.Unloaded or not char.Parent then
+            pcall(function() rigConn:Disconnect() end)
+            return
+        end
+        
+        local isAlive = hum and hum.Health > 0
+        local camDist = (camera.CFrame.Position - head.Position).Magnitude
+        local isFP = isAlive and camDist < 1.8
+        local selfCharmOn = config["Enable Self Chams"] == true and (config["Self Charm Material"] or "Disable") ~= "Disable"
+
+        for _, item in ipairs(rigParts) do
+            local v = item.part
+            if v and v.Parent then
+                pcall(function()
+                    if item.isVM then
+                        v.LocalTransparencyModifier = 1
+                    elseif selfCharmOn then
+                        if isFP then
+                            v.LocalTransparencyModifier = 1
+                        else
+                            v.LocalTransparencyModifier = 0
+                        end
+                    end
+                end)
+            end
+        end
+    end)
+    table.insert(connections, rigConn)
+end
+
+task.spawn(function()
+    if player.Character then syncRig(player.Character) end
+    table.insert(connections, player.CharacterAdded:Connect(syncRig))
+end)
+
+-- Optimized Sync Loop
+local myHRP, myHum = nil, nil
+RunService.Heartbeat:Connect(function()
+    if _G.Unloaded then return end
+    local char = player.Character
+    if char then
+        myHRP = myHRP or char:FindFirstChild("HumanoidRootPart")
+        myHum = myHum or char:FindFirstChildOfClass("Humanoid")
+        
+        if myHRP then
+            safe_properties.CFrame = myHRP.CFrame
+            safe_properties.Velocity = myHRP.Velocity.Magnitude > 22 and (myHRP.Velocity.Unit * 22) or myHRP.Velocity
+        end
+    end
+end)
+
+
+
+local _hitLogs = {}
+local function KRAZZ_HIT_LOG(text, color)
+    task.spawn(function()
+        if not config["Hit Notifications"] or config["Stream Proof"] then return end
+        
+        local logsFolder = workspace.CurrentCamera:FindFirstChild("KrazzHitLogs") or Instance.new("Folder", workspace.CurrentCamera)
+        logsFolder.Name = "KrazzHitLogs"
+        
+        local drawing = Drawing.new("Text")
+        drawing.Text = text
+        drawing.Size = 13
+        drawing.Color = color or Color3.fromRGB(255, 255, 255)
+        drawing.Font = 2 -- Boldish
+        drawing.Outline = true
+        drawing.Center = false
+        drawing.Visible = true
+        
+        -- Start position (Top-Left area, below radar)
+    local startX = 20
+        local startY = (config["Enable Radar"] and 320) or 140
+        
+        table.insert(_hitLogs, {drawing = drawing, time = os.clock()})
+        
+        -- Shift existing logs
+    for i = #_hitLogs - 1, 1, -1 do
+            local log = _hitLogs[i]
+            if log and log.drawing then
+                local targetY = startY - ((#_hitLogs - i) * 16)
+                log.drawing.Position = Vector2.new(startX, targetY)
+            end
+        end
+        drawing.Position = Vector2.new(startX, startY)
+
+        task.delay(3.5, function()
+            local t0 = os.clock()
+            while os.clock() - t0 < 0.5 do
+                local alpha = 1 - ((os.clock() - t0) / 0.5)
+                drawing.Transparency = alpha
+                task.wait()
+            end
+            drawing:Remove()
+            for i, v in ipairs(_hitLogs) do if v.drawing == drawing then table.remove(_hitLogs, i) break end end
+        end)
+    end)
+end
+
+
+
+local function KRAZZ_GLOBAL_DEATHGLOW(targetChar)
+    if not config["Death ESP"] or not targetChar then return end
+    
+    local pos = targetChar:GetPivot().Position
+    local deathText = Drawing.new("Text")
+    deathText.Text = "DEAD"
+    deathText.Size = 22
+    deathText.Center = true
+    deathText.Outline = true
+    deathText.Color = config["Death ESP Color"] or Color3.fromRGB(255, 80, 80)
+    deathText.Transparency = 1
+    deathText.Visible = false
+
+    task.spawn(function()
+        local t0 = os.clock()
+        local duration = 3.0
+        while os.clock() - t0 < duration do
+            if _G.Unloaded then break end
+            local alpha = (os.clock() - t0) / duration
+            local screenPos, onScreen = camera:WorldToViewportPoint(pos)
+            
+            if onScreen then
+                deathText.Position = Vector2.new(screenPos.X, screenPos.Y)
+                deathText.Transparency = 1 - alpha
+                deathText.Visible = true
+            else
+                deathText.Visible = false
+            end
+            task.wait()
+        end
+        deathText:Remove()
+    end)
+end
+
+local function KRAZZ_GLOBAL_HITMARK(pos, amount, forceKill, targetName)
+    if not config["Hit Notifications"] then return end
+    local displayAmount = tonumber(amount) or 0
+    local isKill = forceKill or (displayAmount >= 100) or (tostring(amount):upper() == "KILL")
+    
+    getgenv().KrazzHit = os.clock()
+    if isKill then getgenv().KrazzKill = os.clock() end
+    
+    -- Hitsound: fires ONLY on own confirmed kill or hit, zero-latency, fully client-side
+    -- Using PlayLocalSound = no Sound instance ever parented into game tree = undetectable
+    if config["Hitsound"] then
+        pcall(function()
+            local hType = config["Hitsound Type"] or "Default"
+            local sId = "rbxassetid://8679627751"
+            if hType == "4753603610" then sId = "rbxassetid://4753603610"
+            elseif hType == "7269900245" then sId = "rbxassetid://7269900245" end
+            local vol = math.clamp((config["Hitsound Volume"] or 5) / 10, 0.05, 1.0)
+            if isKill then vol = math.min(vol * 1.35, 1.0) end
+            local s = Instance.new("Sound")
+            s.SoundId = sId; s.Volume = vol; s.RollOffMaxDistance = 0; s.RespectFilteringEnabled = false
+            -- PlayLocalSound is purely client-side    Enever creates a Sound in the DataModel tree
+            game:GetService("SoundService"):PlayLocalSound(s)
+            s:Destroy() -- Destroy immediately, never lingers
+    end)
+    end
+    
+    --[[ DRAWING API HITMARK ]]
+    local hitText = Drawing.new("Text")
+    hitText.Text = isKill and "KILL" or tostring(displayAmount)
+    hitText.Size = isKill and 24 or 18
+    hitText.Center = true
+    hitText.Outline = true
+    hitText.Color = isKill and Color3.fromRGB(255, 50, 80) or Color3.fromRGB(255, 255, 255)
+    hitText.Transparency = 1
+    hitText.Visible = false
+
+    task.spawn(function()
+        local t0 = os.clock()
+        local duration = 0.8
+        while os.clock() - t0 < duration do
+            if _G.Unloaded then break end
+            local alpha = (os.clock() - t0) / duration
+            local offsetPos = pos + Vector3.new(0, 2 * alpha, 0)
+            local screenPos, onScreen = camera:WorldToViewportPoint(offsetPos)
+            
+            if onScreen then
+                hitText.Position = Vector2.new(screenPos.X, screenPos.Y)
+                hitText.Transparency = 1 - (alpha ^ 2)
+                hitText.Visible = true
+            else
+                hitText.Visible = false
+            end
+            task.wait()
+        end
+        hitText:Remove()
+    end)
+end
+
+getgenv()._KRAZZ_ABSOLUTE_FEEDBACK = function(targetChar, isKill, amount)
+    if not targetChar or not config then return end
+    
+--     if we are active or very close ]]
+    local myChar = player.Character
+    local hasWeapon = myChar and (myChar:FindFirstChildWhichIsA("Tool"))
+    local pos = targetChar:GetPivot().Position
+    local dist = (pos - camera.CFrame.Position).Magnitude
+    
+    --[[ FEEDBACK HOOKS ]]
+    task.spawn(KRAZZ_GLOBAL_HITMARK, pos, amount or 100, isKill, targetChar.Name)
+    if isKill and config["Death ESP"] then task.spawn(KRAZZ_GLOBAL_DEATHGLOW, targetChar) end
+end
+getgenv()._KrazzForceTrigger = getgenv()._KRAZZ_ABSOLUTE_FEEDBACK
+getgenv()._KrazzForceFeedback = getgenv()._KRAZZ_ABSOLUTE_FEEDBACK
+local _KRAZZ_ABSOLUTE_FEEDBACK = getgenv()._KRAZZ_ABSOLUTE_FEEDBACK
+
+
+
+--[[ MASTER CONFIGURATION CONSTANTS ]]
+-- DO NOT RE-ASSIGN 'config' variable! Toggles rely on the captured reference in background loops.
+local _baseConfig = {
+    ["Enable ESP"] = false,
+    ["Enable Charm"] = false,
+    ["Team Check"] = false,
+    ["Enable box"] = false,
+    ["Filled box"] = false,
+    ["Visible Check"] = false,
+    ["Self ESP"] = false,
+    ["China Hat"] = false,
+    ["Box Type"] = "Full",
+    ["Health Bar"] = true,
+    ["Player Nickname"] = true,
+    ["Display Name"] = true,
+    ["Distance Tag"] = true,
+    ["Outlines"] = true,
+    ["Head Dot"] = true,
+    ["Distance Type"] = "Bottom",
+    ["Enable Aimbot"] = false,
+    ["Aimbot Team Check"] = true,
+    ["Show FOV"] = true,
+    ["Aimbot FOV"] = 150,
+    ["Smoothing"] = 5,
+    ["Aimbot Key"] = Enum.UserInputType.MouseButton2,
+    ["Death ESP"] = true,
+    ["Aimbot Mode"] = "Hold",
+    ["Enable Silent Aim"] = false,
+    ["Enable Name Spoof"] = false,
+    ["Show Silent FOV"] = true,
+    ["Silent Aim FOV"] = 100,
+    ["Silent Aim 360 FOV"] = false,
+    ["Aimbot Max Distance"] = 1000,
+    ["ESP Max Distance"] = 1000,
+    ["Silent Aim Hitchance"] = 100,
+    ["Silent Aim Target Part"] = "Head",
+    ["Silent Aim Mode"] = "Always",
+    ["SilentAimKey"] = Enum.UserInputType.MouseButton2,
+    ["Silent Visibility Check"] = true,
+    ["Silent Max Distance"] = 1000,
+    ["Enable Triggerbot"] = false,
+    ["Trigger Team Check"] = true,
+    ["Trigger Visibility Check"] = true,
+    ["Click Delay"] = 1, 
+    ["Enable AntiAim"] = false,
+    ["Enable Desync"] = false,
+    ["Desync Range"] = 15,
+    ["Pitch"] = "Down", 
+    ["Yaw Angle"] = "off",
+    ["Yaw"] = "None", 
+    ["At Direction"] = false,
+    ["At Direction Mode"] = "At Targets", 
+    ["Spin Speed"] = 50,
+    ["Random Pitch Speed"] = 50,
+    ["Jitter Speed"] = 50,
+    ["Jitter Speed Multiplier"] = 1,
+    ["Yaw Base Offset"] = 0,
+    ["Jitter Range"] = 180,
+    ["Fake Lag"] = false,
+    ["Fake Lag ticks"] = 10,
+    ["Fake Lag limit"] = 12,
+    ["Fake Lag Duration"] = 100,
+    ["Visibility Check"] = true,
+    ["Prediction"] = false,
+    ["Aim Prediction X"] = 0.165,
+    ["Aim Prediction Y"] = 0.165,
+    ["Target Part"] = "Head",
+    ["MenuKey"] = Enum.KeyCode.Insert,
+    ["Speed Strafe"] = false,
+    ["Airstrafe"] = false,
+    ["Strafe Speed"] = 50, 
+    ["WalkSpeed Boost"] = 50,
+    ["Auto Kill Chat"] = false,
+    ["Kill Message"] = "(xvxzuhxvx)",
+    ["Stream Proof"] = false,
+    ["Hotkeys UI"] = true,
+    ["Filled FOV"] = false,
+    ["Filled FOV Transparency"] = 0.2,
+    ["Silent Filled FOV"] = false,
+    ["Silent Filled FOV Transparency"] = 0.2,
+    ["Third Person"] = false,
+    ["Third Person Distance"] = 10,
+    ["Health Bar"] = true,
+    ["Hitsound"] = true,
+    ["Hitsound Type"] = "Default",
+    ["Hitsound Volume"] = 5,
+    ["Hit Notifications"] = true,
+    ["Death ESP"] = true,
+    ["Death ESP Color"] = Color3.fromRGB(230, 70, 70),
+    ["Soul Particles"] = true,
+    ["ESP Color"] = Color3.fromRGB(230, 70, 70),
+    ["Enable Self Chams"] = false,
+    ["Chams Material"] = "ForceField",
+    ["Chams Animation"] = "Swirl",
+    ["Chams Color"] = Color3.fromRGB(230, 70, 70),
+    ["Chams Reflectance"] = 50,
+    ["Enable Bloom"] = false,
+    ["Bloom Intensity"] = 50,
+    ["Bloom Size"] = 24,
+    ["Bloom Threshold"] = 40,
+    ["Enable Depth Of Field (DOF)"] = false,
+    ["Enable Sun Rays"] = false,
+    ["Sun Rays Intensity"] = 25,
+    ["Sun Rays Spread"] = 50,
+    ["Enable Motion Blur"] = false,
+    ["Motion Blur Intensity"] = 50,
+    ["Lighting Brightness"] = 100,
+    ["Enable Shadows"] = true,
+    ["Shadow Softness"] = 50,
+    ["Exposure Compensation"] = 50,
+    ["Environment Reflections"] = 50,
+    ["Enable Color Shift"] = false,
+    ["Top Ambient/Sky Color"] = Color3.fromRGB(255, 255, 255),
+    ["Bottom Ambient/Ground Color"] = Color3.fromRGB(255, 255, 255),
+    ["Direct Ambient Color"] = Color3.fromRGB(255, 255, 255),
+    ["Direct Outdoor Ambient Color"] = Color3.fromRGB(255, 255, 255),
+    ["Enable Color Correction"] = false,
+    ["Color Correction Preset"] = "Default",
+    ["CC Brightness"] = 50,
+    ["CC Contrast"] = 50,
+    ["CC Saturation"] = 50,
+    ["CC Tint Color"] = Color3.fromRGB(255, 255, 255),
+    ["Enable Fog"] = false,
+    ["Fog Color"] = Color3.fromRGB(255, 255, 255),
+    ["Fog Density"] = 50,
+    ["Fog Distance"] = 0,
+    ["Enemy Box Color"] = Color3.fromRGB(230, 70, 70),
+    ["Enemy Name Color"] = Color3.fromRGB(230, 70, 70),
+    ["Enemy Health Bar Color"] = Color3.fromRGB(0, 255, 0),
+    ["Enemy Weapon Text Color"] = Color3.fromRGB(255, 255, 255),
+    ["Enemy Distance Color"] = Color3.fromRGB(200, 200, 200),
+    ["Enemy Skeleton Color"] = Color3.fromRGB(230, 70, 70),
+    ["Team Box Color"] = Color3.fromRGB(70, 230, 70),
+    ["Team Name Color"] = Color3.fromRGB(70, 230, 70),
+    ["Team Health Bar Color"] = Color3.fromRGB(0, 255, 0),
+    ["Team Weapon Text Color"] = Color3.fromRGB(255, 255, 255),
+    ["Team Distance Color"] = Color3.fromRGB(200, 200, 200),
+    ["Team Skeleton Color"] = Color3.fromRGB(70, 230, 70),
+    ["Aimbot FOV Color"] = Color3.fromRGB(230, 70, 70),
+    ["Silent Aim FOV Color"] = Color3.fromRGB(70, 70, 230),
+    ["Enable Arm Chams"] = false,
+    ["Arm Chams Color"] = Color3.fromRGB(230,230,230),
+    ["Arm Chams Material"] = "ForceField",
+    ["Arm Chams Animation"] = "Swirl",
+    ["Arm Chams Reflectance"] = 100,
+    ["Enable Viewmodel Offset"] = false,
+    ["Viewmodel Offset X"] = 0,
+    ["Viewmodel Offset Y"] = 0,
+    ["Viewmodel Offset Z"] = 0,
+    ["Enable Orbit"] = false,
+    ["Orbit Distance"] = 10,
+    ["Orbit Speed"] = 10,
+    ["Orbit Height"] = 5,
+    ["Enable Noclip"] = false,
+    ["Infinity Jump"] = false,
+    ["Custom Pitch"] = 0,
+    ["Enable Wallbang"] = false,
+    ["Enable Magic Bullet"] = false,
+    ["Hotkeys Pos X"] = 20,
+    ["Hotkeys Pos Y"] = 150,
+    ["Charm Material"] = "Disable",
+    ["Weapon ESP"] = false,
+    ["Soul Particles"] = false,
+    ["Enable Rain"] = false,
+    ["Rain Intensity"] = 50,
+    ["Charm Tracers"] = false,
+    ["Charm Tracer Attachment"] = "Bottom",
+    ["Tracer Color"] = Color3.fromRGB(160, 32, 240),
+    ["Tracer Lifetime"] = 2,
+    ["Enemy Soul Color"] = Color3.fromRGB(230, 70, 70),
+    ["Team Soul Color"] = Color3.fromRGB(70, 230, 70),
+    ["Enable Server Desync"] = false,
+    ["Server Desync Range"] = 30,
+    ["Enable Shadow Clone"] = false,
+    ["Hit Notifications"] = true,
+    ["Hit Number Color"] = Color3.fromRGB(255, 80, 220),
+    ["Shadow Clone Offset"] = 5,
+    ["Shadow Clone Count"] = 2,
+    ["Shadow Clone Speed"] = 1,
+    ["Enable Radar"] = false,
+    ["Radar Size"] = 200,
+    ["Radar Range"] = 300,
+    ["Radar Enemy Color"] = Color3.fromRGB(230, 70, 70),
+    ["Radar Team Color"] = Color3.fromRGB(70, 230, 70),
+    ["Skeleton"] = false,
+    ["Rain Color"] = Color3.fromRGB(160, 200, 255),
+    ["Crosshair"] = false,
+    ["Crosshair Size"] = 10,
+    ["Crosshair Gap"] = 5,
+    ["Crosshair Thickness"] = 2,
+    ["Crosshair Color"] = Color3.fromRGB(230, 60, 60),
+    ["Rotate Crosshair"] = false,
+    ["Crosshair Rotation Speed"] = 2,
+    ["Crosshair Outline"] = true,
+    ["Crosshair Outline Color"] = Color3.fromRGB(0, 0, 0),
+    ["Death ESP"] = false,
+    ["Death ESP Color"] = Color3.fromRGB(230, 70, 70),
+    ["Hitsound"] = true,
+    ["Hitsound Type"] = "Default",
+    ["Hitsound Volume"] = 1.0,
+    ["Spoof Name"] = "HIDDEN NAME",
+    ["Enemy Charm Color"] = Color3.fromRGB(230, 70, 70),
+    ["Team Charm Color"] = Color3.fromRGB(70, 230, 70),
+    ["Jitter Trail Color"] = Color3.fromRGB(160, 80, 255),
+    ["Jitter Trail Material"] = "Glow",
+    ["Enable Jitter Trail"] = false,
+    ["Self Charm Material"] = "ForceField",
+    ["Self Charm Animation"] = "Swirl",
+    ["Self Charm Reflectance"] = 50,
+    ["Self Charm Color"] = Color3.fromRGB(160, 80, 255),
+    ["Mode Selection"] = "Global",
+    ["Time of Day"] = "Day"
+}
+
+-- Merging base values into the existing synchronized config table
+for k, v in pairs(_baseConfig) do
+    if config[k] == nil then config[k] = v end
+    defaultConfig[k] = v
+end
+
+-- Sync shared structures
+uiRegistry = uiRegistry or {}
+connections = connections or {}
+tabs = tabs or {}
+tabButtons = tabButtons or {}
+playerHealthMap = playerHealthMap or {}
+victimHealths = victimHealths or {}
+espObjects = espObjects or {}
+_hitNotifyActive = _hitNotifyActive or {}
+
+-- UI State Initialization
+uiRegistry = uiRegistry or {}
+aimbotEnabled = false
+local spinAngle = 0
+local orbitAngle = 0
+local lastJitterUpdate = os.clock()
+local lastRandomPitchUpdate = os.clock()
+local currentJitterAngle = 0
+local currentRandomPitch = 0 
+local originalC0s = {}
+local origArmProps = {}
+currentSilentTarget = nil 
+-- espObjects moved to top-level
+gui = nil
+HotkeysUI = nil
+Main = nil
+mainScale = nil
+watermark = nil
+poweredBy = nil
+_G.Unloaded = false
+-- Redundant target tracking removed
+local _targetLastHit = 0
+
+--// Drawing Library FOV
+--// Drawing Library FOV
+state.FOVCircle = Drawing.new("Circle")
+state.FOVCircle.Thickness = 1; state.FOVCircle.Color = Color3.fromRGB(230, 70, 70); state.FOVCircle.Filled = false; state.FOVCircle.Transparency = 1; state.FOVCircle.Visible = false
+
+state.FOVFill = Drawing.new("Circle")
+state.FOVFill.Color = Color3.fromRGB(230, 70, 70); state.FOVFill.Filled = true; state.FOVFill.Transparency = 0.2; state.FOVFill.Visible = false
+
+state.SilentFOVCircle = Drawing.new("Circle")
+state.SilentFOVCircle.Thickness = 1; state.SilentFOVCircle.Color = Color3.fromRGB(70, 70, 230); state.SilentFOVCircle.Filled = false; state.SilentFOVCircle.Transparency = 1; state.SilentFOVCircle.Visible = false
+
+state.SilentFOVFill = Drawing.new("Circle")
+state.SilentFOVFill.Color = Color3.fromRGB(70, 70, 230); state.SilentFOVFill.Filled = true; state.SilentFOVFill.Transparency = 0.2; state.SilentFOVFill.Visible = false
+
+-- Hit Notification Draw Logic (Restored)
+-- Utility definitions relocated to top of script.
+
+
+-- China Hat Mesh Generator (Conical Asian Hat Style)
+-- Rainbow hue cycle helper
+local _hatHue = 0
+local function createChinaHat()
+    local mdl = Instance.new("Model")
+    mdl.Name = SECURE_ID .. "_HAT"
+    local folder = camera:FindFirstChild(SECURE_ID) or Instance.new("Folder", camera)
+    folder.Name = SECURE_ID
+    
+    local part = Instance.new("Part", mdl)
+    part.Name = "KrazzHat"; part.Size = Vector3.new(3.5, 1.6, 3.5); part.Transparency = 0.05; part.CanCollide = false; part.Anchored = true; part.Material = Enum.Material.Neon
+    part.Color = Color3.fromHSV(0, 1, 1)
+    local mesh = Instance.new("SpecialMesh", part)
+    mesh.MeshType = Enum.MeshType.FileMesh; mesh.MeshId = "rbxassetid://1033714"; mesh.Scale = Vector3.new(1.2, 0.9, 1.2)
+    mdl.PrimaryPart = part
+    
+    mdl.Parent = folder
+    return mdl
+end
+
+local function cleanup()
+    if _G.Unloaded then return end
+    _G.Unloaded = true
+    
+    -- Disconnect all events immediately
+    for _, v in ipairs(connections) do pcall(function() v:Disconnect() end) end
+
+    -- Destroy All ESP Objects Immediately
+--     FORE destroying container
+    -- Otherwise game scripts (LobbyCharacter.NameHint etc.) that watch character
+    -- children will get nil references and crash.
+    if espObjects then
+        for p, d in pairs(espObjects) do
+--             fore destroying container
+    if d.highlight then
+                pcall(function()
+                    d.highlight.Enabled = false
+                    d.highlight.Adornee = nil
+                    d.highlight:Destroy()
+                end)
+            end
+            -- Also find/destroy any Charm highlights directly on character
+    if p and p.Character then
+                for _, v in ipairs(p.Character:GetDescendants()) do
+                    if v:IsA("Highlight") and v.Name == "Charm" then
+                        pcall(function() v.Adornee = nil; v.Enabled = false; v:Destroy() end)
+                    end
+                end
+            end
+            if d.container then pcall(function() d.container:Destroy() end) end
+            if d.chinaHat then pcall(function() d.chinaHat:Destroy() end) end
+            espObjects[p] = nil
+        end
+    end
+
+    local kvis = camera:FindFirstChild(SECURE_ID)
+    if kvis then pcall(function() kvis:Destroy() end) end
+
+    -- Remove Drawing Objects (FOVCircles)
+    pcall(function() if state.FOVCircle then state.FOVCircle:Remove() end end)
+    pcall(function() if state.FOVFill then state.FOVFill:Remove() end end)
+    pcall(function() if state.SilentFOVCircle then state.SilentFOVCircle:Remove() end end)
+    pcall(function() if state.SilentFOVFill then state.SilentFOVFill:Remove() end end)
+
+    -- Restore Character Joints (Anti-Aim Reset)
+    local char = player.Character
+    if char then
+        pcall(function()
+            local neck = char:FindFirstChild("Neck", true) or char:FindFirstChild("Neck Joint", true)
+            local leftS = char:FindFirstChild("LeftShoulder", true) or char:FindFirstChild("Left Shoulder", true)
+            local rightS = char:FindFirstChild("RightShoulder", true) or char:FindFirstChild("Right Shoulder", true)
+            if neck and state.originalC0s[neck] then neck.C0 = state.originalC0s[neck] end
+            if leftS and state.originalC0s[leftS] then leftS.C0 = state.originalC0s[leftS] end
+            if rightS and state.originalC0s[rightS] then rightS.C0 = state.originalC0s[rightS] end
+        end)
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.WalkSpeed = 16; hum.JumpPower = 50; hum.AutoRotate = true end
+    end
+
+    --[[ FULL RESTORE: Charm / Self Charm - all characters ]]
+    pcall(function()
+        for _, p in ipairs(Players:GetPlayers()) do
+            local c = p.Character
+            if c then
+                local bc = c:FindFirstChildOfClass("BodyColors")
+                for _, v in ipairs(c:GetDescendants()) do
+                    if v:IsA("BasePart") then
+                        pcall(function()
+                            v.Material = Enum.Material.Plastic
+                            v.Transparency = 0
+                            if bc then
+                                local n = v.Name
+                                if n == "Head" then v.Color = bc.HeadColor3
+                                elseif n == "Torso" or n == "UpperTorso" or n == "LowerTorso" then v.Color = bc.TorsoColor3
+                                elseif n == "Left Arm" or n == "LeftHand" or string.find(n, "Left.*Arm") then v.Color = bc.LeftArmColor3
+                                elseif n == "Right Arm" or n == "RightHand" or string.find(n, "Right.*Arm") then v.Color = bc.RightArmColor3
+                                elseif n == "Left Leg" or n == "LeftFoot" or string.find(n, "Left.*Leg") then v.Color = bc.LeftLegColor3
+                                elseif n == "Right Leg" or n == "RightFoot" or string.find(n, "Right.*Leg") then v.Color = bc.RightLegColor3
+                                elseif n == "Handle" then v.Color = Color3.new(1, 1, 1)
+                                else v.Color = Color3.fromRGB(163, 162, 165) end
+                            else
+                                v.Color = Color3.fromRGB(163, 162, 165)
+                            end
+                        end)
+                    elseif v:IsA("Decal") or v:IsA("Texture") then
+                        pcall(function() v.Transparency = 0 end)
+                    elseif v:IsA("Highlight") then
+                        pcall(function() v:Destroy() end)
+                    end
+                end
+            end
+        end
+    end)
+
+    --[[ FULL RESET: Lighting / Sky ]]
+    local l = game:GetService("Lighting")
+    pcall(function()
+        l.FogStart = 0; l.FogEnd = 100000; l.ClockTime = 14; l.Brightness = 1
+        l.Ambient = Color3.fromRGB(0, 0, 0)
+        l.OutdoorAmbient = Color3.fromRGB(127, 127, 127)
+    end)
+    for _, n in pairs({"KrazzBloom","KrazzDOF","KrazzSunRays","KrazzBlur","KrazzCC","KrazzSky","KrazzAtmosphere"}) do 
+        local e = l:FindFirstChild(n); if e then pcall(function() e:Destroy() end) end 
+    end
+    -- Restore default sky
+    pcall(function()
+        for _, v in ipairs(l:GetChildren()) do
+            if v:IsA("Sky") then v:Destroy() end
+            if v:IsA("Atmosphere") and v.Name == "KrazzAtmosphere" then v:Destroy() end
+        end
+        local defaultSky = Instance.new("Sky", l); defaultSky.Name = "DefaultSky"
+    end)
+    
+    --[[ DESTROY ALL SECURE VISUALS ]]
+    pcall(function()
+        local kv = camera:FindFirstChild(SECURE_ID)
+        if kv then kv:Destroy() end
+    end)
+    
+    -- Cleanup visual particles from other players
+    for _, p in ipairs(Players:GetPlayers()) do
+        pcall(function()
+            local c = p.Character
+            if c then
+                for _, v in ipairs(c:GetDescendants()) do if v:IsA("ParticleEmitter") and v.Name == "KrazzSoul" then v:Destroy() end end
+            end
+        end)
+    end
+
+    if workspace:FindFirstChild("KrazzRain") then pcall(function() workspace.KrazzRain:Destroy() end) end
+    if workspace.CurrentCamera:FindFirstChild("KrazzRain") then pcall(function() workspace.CurrentCamera.KrazzRain:Destroy() end) end
+    
+    if gui then pcall(function() gui:Destroy() end) end
+    if HotkeysUI then pcall(function() HotkeysUI:Destroy() end) end
+    if radarGui then pcall(function() radarGui:Destroy() end) end
+    pcall(function() for _, c in pairs(scObjects) do c:Destroy() end end)
+    
+    -- Final Registry Purge
+    pcall(function()
+        for k,v in pairs(state) do
+            if typeof(v) == "RBXScriptConnection" then v:Disconnect()
+            elseif typeof(v) == "table" and v.Remove then pcall(function() v:Remove() end)
+            elseif typeof(v) == "Instance" then pcall(function() v:Destroy() end) end
+            state[k] = nil
+        end
+    end)
+end
+
+-- Functions
+local function getMousePos()
+    local loc = UIS:GetMouseLocation()
+    return Vector2.new(loc.X, loc.Y)
+end
+
+function isVisible(part, char)
+    if not part then return false end
+    local cam = workspace.CurrentCamera
+    local origin = camera.CFrame.Position
+    local dest = part.Position
+    local direction = dest - origin
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local kv = camera:FindFirstChild(SECURE_ID)
+    params.FilterDescendantsInstances = {player.Character, cam, kv}
+    if char then table.insert(params.FilterDescendantsInstances, char) end
+    
+    local result = workspace:Raycast(origin, direction, params)
+    return result == nil
+end
+
+local function getSilentTarget()
+    local mPos = getMousePos()
+    local cam = workspace.CurrentCamera
+    local closestDist = config["Silent Aim FOV"]
+    local currentTarget = nil
+    local maxDist = config["Silent Max Distance"] or 2000
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then
+            local char = p.Character
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local parts = getRigParts(char)
+            local part = char:FindFirstChild(config["Silent Aim Target Part"]) or parts.Head or parts.Torso
+            
+            if hum and hum.Health > 0 and part then
+                local isGood = true
+                if config["Team Check"] and p.Team == player.Team then isGood = false end
+                if isGood and char:FindFirstChildOfClass("ForceField") then isGood = false end
+
+                if isGood then
+                    local dist3D = (camera.CFrame.Position - part.Position).Magnitude
+                    if dist3D <= maxDist then
+                        local pos, onS = cam:WorldToViewportPoint(part.Position)
+                        if onS then
+                            local mag = (Vector2.new(pos.X, pos.Y) - mPos).Magnitude
+                            if (config["Silent Aim 360 FOV"] or mag < closestDist) then
+                                if config["Silent Visibility Check"] then
+                                    if isVisible(part, char) then
+                                        closestDist = mag
+                                        currentTarget = part
+                                    end
+                                else
+                                    closestDist = mag
+                                    currentTarget = part
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return currentTarget
+end
+
+-- for Yub-X)
+local function makeDraggable(gui)
+    local dragging, dragInput, dragStart, startPos
+    local function update(input)
+        local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStart
+        gui.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+    gui.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = Vector2.new(input.Position.X, input.Position.Y)
+            startPos = gui.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    gui.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then update(input) end
+    end)
+end
+
+local function playHitsound(isKill)
+    if not config["Hitsound"] then return end
+    local sound = Instance.new("Sound", game:GetService("SoundService"))
+    local hType = config["Hitsound Type"] or "Default"
+    local sId
+    if hType == "4753603610" then
+        sId = "rbxassetid://4753603610"
+    elseif hType == "7269900245" then
+        sId = "rbxassetid://7269900245"
+    else
+        sId = "rbxassetid://8679627751"
+    end
+    sound.SoundId = sId
+    local vol = math.clamp((config["Hitsound Volume"] or 1) / 10, 0.1, 8.0)
+    if isKill then vol = vol * 1.5 end
+    sound.Volume = vol
+    sound:Play()
+    pcall(function() game:GetService("Debris"):AddItem(sound, 3) end)
+end
+
+local function spawnSoul(pos)
+    if not config["Soul Particles"] then return end
+    local p = Instance.new("Part")
+    p.Name = SECURE_ID .. "_SOUL"
+    p.Shape = Enum.PartType.Ball
+    p.Size = Vector3.new(0.5, 0.5, 0.5)
+    p.Position = pos
+    p.CanCollide = false
+    p.Anchored = true
+    p.Material = Enum.Material.Neon
+    p.Color = Color3.fromRGB(160, 80, 255)
+    p.Transparency = 0.5
+    local folder = camera:FindFirstChild(SECURE_ID) or Instance.new("Folder", camera)
+    folder.Name = SECURE_ID
+    p.Parent = folder
+    
+    task.spawn(function()
+        local t = os.clock()
+        while os.clock() - t < 2 do
+            if _G.Unloaded or not p.Parent then break end
+            p.Position = p.Position + Vector3.new(0, 0.12, 0)
+            p.Transparency = 0.5 + ((os.clock() - t) / 2) * 0.5
+            p.Size = p.Size * 0.98
+            task.wait(0.03)
+        end
+        pcall(function() p:Destroy() end)
+    end)
+end
+
+getgenv().tween = function(obj, info, prop)
+    if not obj or not obj:IsDescendantOf(game) then return nil end
+    local t = TweenService:Create(obj, info, prop)
+    t:Play()
+    return t
+end
+
+-- Anti-aim: pitch-down arm pose (shoulder ~-75 ref, diagonal-down, no back swing)
+local ARM_REF_PITCH_DEG = -75
+local ARM_DIAG_FORWARD_DEG = 14
+local ARM_PITCH_CLAMP = { Min = -92, Max = -58 }
+local ARM_DOWN_BLEND = 0.72
+
+local function shoulderPitchDownDelta(rigType, isRight, blend)
+    blend = math.clamp(blend, 0, 1)
+    if blend < 1e-5 then
+        return CFrame.new()
+    end
+    local pitchDeg = ARM_REF_PITCH_DEG * blend
+    pitchDeg = math.clamp(pitchDeg, ARM_PITCH_CLAMP.Min, ARM_PITCH_CLAMP.Max)
+    local mainPitch = math.rad(pitchDeg)
+    local forwardTilt = math.rad(ARM_DIAG_FORWARD_DEG) * blend
+    if rigType == Enum.HumanoidRigType.R6 then
+        local xPitch = math.rad(pitchDeg) * 0.42
+        local ySide = isRight and forwardTilt or -forwardTilt
+        return CFrame.Angles(xPitch, ySide, 0)
+    end
+    if isRight then
+        return CFrame.fromEulerAnglesYXZ(mainPitch, -forwardTilt, 0)
+    end
+    return CFrame.fromEulerAnglesYXZ(mainPitch, forwardTilt, 0)
+end
+
+local function lerpShoulderWithDelta(baseC0, deltaRot, t)
+    t = math.clamp(t, 0, 1)
+    return baseC0:Lerp(baseC0 * deltaRot, t)
+end
+
+--// Staggered UI Initialization (Linear Load)
+pcall(function() if not game.Loaded then game.Loaded:Wait() end end)
+task.wait(0.2) 
+-- Page Initialization
+-- for max compatibility)
+do
+    state.PoweredByLarge = true
+    state.PoweredByLarge = true
+    state.radarUI = {dots = {}, lines = {}}
+    state.shadowClones = {}
+    state.rainLines = {}
+    state.accounts = {}
+    state.usedKeys = {}
+    
+    local authFilePath = "KrazzAuthData.json"
+    pcall(function()
+        if isfile and readfile and isfile(authFilePath) then
+            local HttpService = game:GetService("HttpService")
+            local data = HttpService:JSONDecode(readfile(authFilePath))
+            if data and data.accounts then state.accounts = data.accounts end
+            if data and data.usedKeys then state.usedKeys = data.usedKeys end
+        end
+    end)
+    state.saveAuth = function()
+        pcall(function()
+            if writefile then
+                local HttpService = game:GetService("HttpService")
+                writefile(authFilePath, HttpService:JSONEncode({accounts = state.accounts, usedKeys = state.usedKeys}))
+            end
+        end)
+    end
+
+    --================ UI Initialization =================--
+    local function setCursorVisible(val)
+        pcall(function()
+            if state.CustomCursor then state.CustomCursor.Visible = val end
+            -- Correctly hide native cursor when custom cursor is active
+            UIS.MouseIconEnabled = not val
+            if val then
+                UIS.MouseBehavior = Enum.MouseBehavior.Default
+                pcall(function() UIS.MouseIconEnabled = false end)
+            end
+        end)
+    end
+    state.setCursorVisible = setCursorVisible
+
+    state.gui = Instance.new("ScreenGui")
+    state.gui.Name = SECURE_ID .. "_GUI"
+    
+
+    
+    local function getUIContainer()
+        local success, res = pcall(function()
+            if typeof(gethui) == "function" then return gethui() end
+            if game:GetService("CoreGui") then return game:GetService("CoreGui") end
+            return player:WaitForChild("PlayerGui", 5)
+        end)
+        return success and res or player:WaitForChild("PlayerGui")
+    end
+    
+    state.gui.Parent = getUIContainer()
+    state.gui.ResetOnSpawn = false
+    state.gui.IgnoreGuiInset = true 
+    state.gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    -- [[ PERSISTENT UI TOGGLE (TOP-RIGHT) ]]
+    local toggleUI = Instance.new("ScreenGui")
+    toggleUI.Name = "KrazzToggleUI"
+    toggleUI.Parent = state.gui.Parent
+    toggleUI.IgnoreGuiInset = true
+    toggleUI.DisplayOrder = 99999999
+    toggleUI.ZIndexBehavior = Enum.ZIndexBehavior.Global
+
+    local toggleBtn = Instance.new("TextButton", toggleUI)
+    toggleBtn.Name = "MainToggle"
+    toggleBtn.Size = UDim2.new(0, 44, 0, 44)
+    toggleBtn.Position = UDim2.new(1, -64, 0, 50) -- Adjusted down slightly to avoid game buttons
+    toggleBtn.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+    toggleBtn.Text = "K"
+    toggleBtn.TextColor3 = Color3.fromRGB(160, 80, 255)
+    toggleBtn.TextSize = 24
+    toggleBtn.Font = Enum.Font.GothamBold
+    toggleBtn.ZIndex = 10000000
+    toggleBtn.Visible = state.isMobile
+    state.ToggleBtn = toggleBtn
+
+    Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(1, 0)
+    local tStroke = Instance.new("UIStroke", toggleBtn)
+    tStroke.Color = Color3.fromRGB(160, 80, 255); tStroke.Thickness = 1.8; tStroke.Transparency = 0.4
+    
+    -- // MOBILE AIM LOCK BUTTON //
+    if state.isMobile then
+        local aimLock = Instance.new("TextButton", toggleUI)
+        aimLock.Name = "KrazzAimLock"
+        aimLock.Size = UDim2.new(0, 44, 0, 44)
+        aimLock.Position = UDim2.new(1, -64, 0, 110) -- Right under the ToggleBtn
+        aimLock.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+        aimLock.BackgroundTransparency = 0.2
+        aimLock.Text = "AIM"
+        aimLock.TextColor3 = Color3.fromRGB(160, 80, 255)
+        aimLock.Font = Enum.Font.GothamBold
+        aimLock.TextSize = 14
+        aimLock.Active = true
+        Instance.new("UICorner", aimLock).CornerRadius = UDim.new(1, 0)
+        local btnStroke = Instance.new("UIStroke", aimLock)
+        btnStroke.Color = Color3.fromRGB(160, 80, 255)
+        btnStroke.Thickness = 1.5
+        
+        local function onAimInput(input, down)
+            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+                getgenv()._KrazzMobileAimLock = down
+                if not down then pcall(function() getgenv()._aimActive = false end) end
+                tween(aimLock, TweenInfo.new(0.1), {
+                    BackgroundColor3 = down and Color3.fromRGB(160, 80, 255) or Color3.fromRGB(30, 30, 35),
+                    TextColor3 = down and Color3.new(1,1,1) or Color3.fromRGB(160, 80, 255)
+                })
+            end
+        end
+        aimLock.InputBegan:Connect(function(input) onAimInput(input, true) end)
+        aimLock.InputEnded:Connect(function(input) onAimInput(input, false) end)
+        makeDraggable(aimLock)
+        
+        task.spawn(function()
+            while task.wait(0.5) do
+                if _G.Unloaded then break end
+                aimLock.Visible = config["Enable Aimbot"] == true
+            end
+        end)
+    end
+
+    -- Shared Toggle Logic with Ultra-Robust Debounce
+    local lastToggle = 0
+    local isToggling = false
+    state.toggleMenu = function()
+        pcall(function()
+            local now = os.clock()
+            if (now - lastToggle) < 0.3 or isToggling then return end
+            if not state.Main or not state.mainScale then return end
+            
+            lastToggle = now
+            local target = not state.Main.Visible
+            
+            if target then
+                -- Opening Sequence
+                isToggling = true
+                state.Main.Visible = true; _G._krazzMenuOpen = true
+                -- Restore cursor visibility when menu opens (was missing - only close called setCursorVisible)
+                if not state.isMobile then setCursorVisible(true) end
+                local tgtScale = state.isMobile and 0.75 or 1
+                local t = tween(state.mainScale, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = tgtScale})
+                if t then
+                    t.Completed:Once(function() 
+                        state.mainScale.Scale = tgtScale
+                        isToggling = false 
+                    end)
+                else
+                    state.mainScale.Scale = tgtScale
+                    isToggling = false
+                end
+            else
+                -- Closing Sequence
+                isToggling = true
+                local l = game:GetService("Lighting")
+                local b = l:FindFirstChild("KrazzBlur") or l:FindFirstChildOfClass("BlurEffect")
+                if b then tween(b, TweenInfo.new(0.2), {Size = 0}) end
+                
+                local t = tween(state.mainScale, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = 0})
+                if state.Backdrop then state.Backdrop.Visible = false end
+                
+                -- Ensure ScreenGui doesn't block clicks when closed
+                if state.gui then state.gui.Enabled = false; task.delay(0.2, function() state.gui.Enabled = true end) end
+
+                task.delay(0.2, function() 
+                    if state.Main then state.Main.Visible = false; _G._krazzMenuOpen = false end
+                    setCursorVisible(false)
+                    isToggling = false
+                end)
+            end
+        end)
+    end
+
+    toggleBtn.Activated:Connect(state.toggleMenu)
+    
+    gui = state.gui -- Fix for global gui reference used by ESP
+
+
+    --================ Watermark =================--
+    state.watermark = Instance.new("TextLabel", state.gui)
+    state.watermark.Name = "Watermark"
+    state.watermark.Size = UDim2.new(0, 250, 0, 30)
+    state.watermark.Position = UDim2.new(0, 20, 0, 20)
+    state.watermark.BackgroundTransparency = 1; state.watermark.Text = "KRAZZ.WIN | VERSION 2.4.9.4"; state.watermark.TextColor3 = Color3.fromRGB(230, 70, 70); state.watermark.TextSize = 14; state.watermark.Font = Enum.Font.GothamBold; state.watermark.Visible = false
+    local ws = Instance.new("UIStroke", state.watermark); ws.Thickness = 1.2; ws.Color = Color3.new(0,0,0); ws.Transparency = 0.5
+    state.watermark.TextXAlignment = Enum.TextXAlignment.Left
+
+    state.poweredBy = Instance.new("TextLabel", state.gui)
+    state.poweredBy.Name = "PoweredByKrazzLarge"; state.poweredBy.Size = UDim2.new(0, 300, 0, 40); state.poweredBy.Position = UDim2.new(0, 20, 0, 40); state.poweredBy.BackgroundTransparency = 1; state.poweredBy.Text = "Powered by Krazz"; state.poweredBy.TextColor3 = Color3.fromRGB(255, 255, 255); state.poweredBy.TextSize = 28; state.poweredBy.Font = Enum.Font.GothamBold; state.poweredBy.Visible = true
+    state.poweredBy.TextXAlignment = Enum.TextXAlignment.Left
+    state.poweredBy.Active = false
+    pcall(function() state.poweredBy.Interactable = false end)
+    
+    local ps = Instance.new("UIStroke", state.poweredBy); ps.Thickness = 1; ps.Color = Color3.new(0,0,0); ps.Transparency = 0.5
+    local pStroke = Instance.new("UIStroke", state.poweredBy); pStroke.Thickness = 1.2; pStroke.Color = Color3.fromRGB(160, 80, 255); pStroke.Transparency = 0.45
+
+    -- // WRITING ORDER SHINE EFFECT //
+    local pGrad = Instance.new("UIGradient", state.poweredBy)
+    pGrad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.new(1,1,1)),
+        ColorSequenceKeypoint.new(0.45, Color3.new(1,1,1)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 180, 255)), -- Subtle pink-white shine
+        ColorSequenceKeypoint.new(0.55, Color3.new(1,1,1)),
+        ColorSequenceKeypoint.new(1, Color3.new(1,1,1))
+    }
+    pGrad.Transparency = NumberSequence.new{
+        NumberSequenceKeypoint.new(0, 0),
+        NumberSequenceKeypoint.new(0.42, 0),
+        NumberSequenceKeypoint.new(0.5, 0),
+        NumberSequenceKeypoint.new(0.58, 0),
+        NumberSequenceKeypoint.new(1, 0)
+    }
+    
+    task.spawn(function()
+        local off = -1.5
+        while task.wait(0.01) do
+            if _G.Unloaded or not state.poweredBy.Parent then break end
+            off = off + 0.012
+            if off > 1.5 then off = -1.5; task.wait(3) end -- Delay between sweeps
+            pGrad.Offset = Vector2.new(off, 0)
+        end
+    end)
+
+    --================ Custom "K" Cursor =================--
+    state.CustomCursor = Instance.new("TextLabel", state.gui)
+    state.CustomCursor.Name = SECURE_ID .. "_Cursor"
+    state.CustomCursor.Size = UDim2.new(0, 24, 0, 24)
+    state.CustomCursor.AnchorPoint = Vector2.new(0.5, 0.5)
+    state.CustomCursor.BackgroundTransparency = 1
+    state.CustomCursor.Text = "K"
+    state.CustomCursor.TextColor3 = Color3.fromRGB(170, 100, 255)
+    state.CustomCursor.TextSize = 22
+    state.CustomCursor.Font = Enum.Font.GothamBold
+    state.CustomCursor.ZIndex = 11000
+    state.CustomCursor.Visible = false
+    
+    local cs = Instance.new("UIStroke", state.CustomCursor); cs.Thickness = 1.8; cs.Color = Color3.new(0,0,0)
+    local glow = Instance.new("UIStroke", state.CustomCursor); glow.Color = Color3.fromRGB(170, 100, 255); glow.Thickness = 2.5; glow.Transparency = 0.5
+    local grad = Instance.new("UIGradient", state.CustomCursor); grad.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(200,100,255)), ColorSequenceKeypoint.new(1, Color3.fromRGB(120,50,255))}
+
+    local trailFolder = Instance.new("Folder", state.gui); trailFolder.Name = "CursorTrails"
+    local cursorLerpPos = Vector2.new(0,0)
+    local function updateCursor()
+        if not state.CustomCursor or not state.CustomCursor.Parent then return end
+        
+-- for First-Person game compatibility
+    if state.CustomCursor.Visible then
+            UIS.MouseBehavior = Enum.MouseBehavior.Default
+        end
+
+        local targetPos = UIS:GetMouseLocation()
+        local currentPos = Vector2.new(state.CustomCursor.Position.X.Offset, state.CustomCursor.Position.Y.Offset)
+        
+        -- // 1. DELAYED FOLLOW (Lerp 0.18)
+        cursorLerpPos = cursorLerpPos:Lerp(targetPos, 0.18)
+        state.CustomCursor.Position = UDim2.fromOffset(cursorLerpPos.X, cursorLerpPos.Y)
+        
+        -- // 2. PHYSICS STRETCH & TRAILS
+    local velocity = (targetPos - currentPos).Magnitude
+        local stretch = math.clamp(velocity / 10, 0, 12)
+        
+        -- Emit Trail Clones (Lv2 Effect)
+    if velocity > 3 and state.CustomCursor.Visible then
+            local trail = state.CustomCursor:Clone()
+            trail.Parent = trailFolder; trail.ZIndex = 99999; trail.Name = "T"
+            trail:ClearAllChildren() -- No heavy assets on trails
+            
+            task.spawn(function()
+                local tTween = TweenService:Create(trail, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                    Size = UDim2.fromOffset(5, 5),
+                    TextTransparency = 1
+                })
+                tTween:Play()
+                tTween.Completed:Wait()
+                trail:Destroy()
+            end)
+        end
+        
+        -- Continuous rotation for "Sentience"
+        state.CustomCursor.Rotation = state.CustomCursor.Rotation + 1.2
+        
+        if state.CustomCursor.Visible and not state.isMobile then
+            pcall(function() UIS.MouseIconEnabled = false end)
+            
+            -- // 3. HOVER SENSING
+    local pGui = player:FindFirstChildOfClass("PlayerGui")
+            local isHovering = false
+            if pGui then
+                local guiObjects = pGui:GetGuiObjectsAtPosition(targetPos.X, targetPos.Y)
+                for _, obj in ipairs(guiObjects) do
+                    if obj:IsA("TextButton") or obj:IsA("ImageButton") then
+                        isHovering = true; break
+                    end
+                end
+            end
+            
+            local baseSize = isHovering and 30 or 20
+            local targetSize = baseSize + stretch
+            local targetColor = isHovering and Color3.fromRGB(180, 120, 255) or Color3.fromRGB(170, 100, 255)
+            
+            -- Multi-property synchronization
+            tween(state.CustomCursor, TweenInfo.new(0.15), {
+                Size = UDim2.fromOffset(targetSize, targetSize),
+                TextColor3 = targetColor
+            })
+            if state.CustomCursor:FindFirstChildOfClass("UIStroke") then
+                tween(state.CustomCursor:FindFirstChildOfClass("UIStroke"), TweenInfo.new(0.15), {Color = targetColor})
+            end
+        else
+            if state.isMobile then
+                state.CustomCursor.Visible = false
+            end
+            if not (state.Main and state.Main.Visible) then
+                pcall(function() UIS.MouseIconEnabled = true end)
+            end
+        end
+    end
+    RunService:BindToRenderStep(SECURE_ID .. "_CursorUpdate", Enum.RenderPriority.Last.Value, updateCursor)
+
+    -- // 4. TACTICAL CLICK PULSE (30 -> 20 Bounce)
+    table.insert(connections, UIS.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 and state.CustomCursor and state.CustomCursor.Visible then
+            tween(state.CustomCursor, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.fromOffset(35, 35)})
+            task.delay(0.1, function()
+                if state.CustomCursor then
+                    tween(state.CustomCursor, TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.fromOffset(20, 20)})
+                end
+            end)
+        end
+    end))
+
+    -- Function hoisted to line 1539 for runtime safety
+
+    --================ UI Transition Helper =================--
+    state.switchFrame = function(from, to, direction)
+        if from then
+            local targetPos = (direction == "left") and UDim2.new(from.Position.X.Scale, from.Position.X.Offset - 150, from.Position.Y.Scale, from.Position.Y.Offset) or UDim2.new(from.Position.X.Scale, from.Position.X.Offset + 150, from.Position.Y.Scale, from.Position.Y.Offset)
+            
+            TweenService:Create(from, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+                Position = targetPos
+            }):Play()
+            task.delay(0.35, function() from.Visible = false end)
+        end
+        
+        if to then
+            local startPos = (direction == "left") and UDim2.new(to.Position.X.Scale, to.Position.X.Offset + 150, to.Position.Y.Scale, to.Position.Y.Offset) or UDim2.new(to.Position.X.Scale, to.Position.X.Offset - 150, to.Position.Y.Scale, to.Position.Y.Offset)
+            local finalPos = UDim2.new(0.5, -to.Size.X.Offset/2, 0.5, -to.Size.Y.Offset/2)
+            
+            to.Position = startPos
+            to.Visible = true
+            
+            TweenService:Create(to, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+                Position = finalPos
+            }):Play()
+        end
+    end
+
+
+
+    --================ UI Main =================--
+    local function makeDraggable(frame)
+        local dragging, dragInput, dragStart, startPos
+        frame.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true; dragStart = Vector2.new(input.Position.X, input.Position.Y); startPos = frame.Position
+            end
+        end)
+        frame.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then dragInput = input end
+        end)
+        UIS.InputChanged:Connect(function(input)
+            if input == dragInput and dragging then
+                local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStart
+                frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end)
+        UIS.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        end)
+    end
+
+    -- Backdrop Overlay (Depth Layer)
+    state.Backdrop = Instance.new("Frame", state.gui)
+    state.Backdrop.Name = "Backdrop"
+    state.Backdrop.Size = UDim2.new(1, 0, 1, 0)
+    state.Backdrop.BackgroundColor3 = Color3.new(0, 0, 0)
+    state.Backdrop.BackgroundTransparency = 0.7
+    state.Backdrop.BorderSizePixel = 0
+    state.Backdrop.ZIndex = 0
+    state.Backdrop.Visible = false
+
+    -- [EXPERT ROBLOX UI] Glassmorphism Dashboard Structure
+    -- Target Asset ID: 10199999897 | Mode: Centered / Fit
+    
+    state.Main = Instance.new("Frame", state.gui)
+    state.Main.Name = "GlassFrame"
+    state.Main.Size = UDim2.new(0, 800, 0, 500)
+    state.Main.Position = UDim2.new(0.5, -400, 0.5, -250)
+    state.Main.BackgroundColor3 = Color3.fromRGB(15, 18, 30)
+    state.Main.BackgroundTransparency = 1 -- [REQUIRED VALUE]
+    state.Main.BorderSizePixel = 0
+    state.Main.Active = false
+    state.Main.Visible = false
+    state.Main.ZIndex = 2 -- [LAYER: GLASS 2]
+    state.Main.ClipsDescendants = false
+    
+    local MainCorner = Instance.new("UICorner", state.Main)
+    MainCorner.CornerRadius = UDim.new(0, 10)
+    
+    local MainStroke = Instance.new("UIStroke", state.Main)
+    MainStroke.Thickness = 1.2
+    MainStroke.Color = Color3.fromRGB(255, 255, 255)
+    MainStroke.Transparency = 0.4
+    MainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+    -- [LAYER: BACKGROUND 1]
+    local MainBackground = Instance.new("ImageLabel", state.Main)
+    MainBackground.Name = "Background"
+    MainBackground.Size = UDim2.new(1, 0, 1, 0)
+    MainBackground.Position = UDim2.new(0, 0, 0, 0)
+    MainBackground.BackgroundTransparency = 1
+--     for Marketplace Assets
+    MainBackground.Image = "rbxthumb://type=Asset&id=10199999897&w=768&h=432" 
+    MainBackground.ImageTransparency = 0.5 -- [REQD VALUE]
+    MainBackground.ScaleType = Enum.ScaleType.Crop -- [SHARP FILL] Ensures clarity and correct aspect ratio
+    MainBackground.ZIndex = 1 
+    MainBackground.Active = false
+    Instance.new("UICorner", MainBackground).CornerRadius = UDim.new(0, 10)
+    
+    local bgGrad = Instance.new("UIGradient", MainBackground)
+    bgGrad.Rotation = 135
+    bgGrad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.new(1, 1, 1)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(180, 180, 200))
+    }
+
+    local blurEffect = game:GetService("Lighting"):FindFirstChild("KrazzBlur") or Instance.new("BlurEffect", game:GetService("Lighting"))
+    blurEffect.Name = "KrazzBlur"; blurEffect.Size = 0; blurEffect.Enabled = true
+    
+    state.mainScale = Instance.new("UIScale", state.Main); state.mainScale.Scale = state.isMobile and 0.75 or 1
+    makeDraggable(state.Main)
+
+--     for clean background.
+    local function buildRotatingLogo(parent)
+        local branding = Instance.new("TextLabel", parent)
+        branding.Name = "RotatingBranding"
+        branding.AnchorPoint = Vector2.new(0.5, 0.5)
+        branding.Size = UDim2.new(0, 140, 0, 140)
+        branding.Position = UDim2.new(0.6, 0, 0, 250) -- Vertically centered in the gap area
+        branding.BackgroundTransparency = 1
+        branding.Text = "KZ"
+        branding.TextColor3 = Color3.new(1, 1, 1)
+        branding.Font = Enum.Font.GothamBold
+        branding.TextSize = 50
+        branding.ZIndex = 5000
+        branding.TextTransparency = 0 -- Vibrant
+    local grad = Instance.new("UIGradient", branding)
+        grad.Rotation = 45
+        grad.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0, Color3.fromHex("FFB6C1")),
+            ColorSequenceKeypoint.new(0.5, Color3.fromHex("FFD1DC")),
+            ColorSequenceKeypoint.new(1, Color3.fromHex("FFB6C1"))
+        }
+
+        local shine = Instance.new("UIGradient", branding)
+        shine.Name = "Shine"
+        shine.Rotation = 35 -- Diagonal
+        shine.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0, Color3.new(1,1,1)),
+            ColorSequenceKeypoint.new(0.48, Color3.new(1,1,1)),
+            ColorSequenceKeypoint.new(0.5, Color3.new(1,1,1)),
+            ColorSequenceKeypoint.new(0.52, Color3.new(1,1,1)),
+            ColorSequenceKeypoint.new(1, Color3.new(1,1,1))
+        }
+        shine.Transparency = NumberSequence.new{
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.48, 1),
+            NumberSequenceKeypoint.new(0.5, 0), -- Pure white gleam
+            NumberSequenceKeypoint.new(0.52, 1),
+            NumberSequenceKeypoint.new(1, 1)
+        }
+        
+        -- // INFINITE ROTATION LOOP (Independent) //
+        task.spawn(function()
+            local ang = 0
+            while task.wait() do
+                if _G.Unloaded or not branding.Parent then break end
+                branding.Visible = parent.Visible
+                if branding.Visible then
+                    ang = (ang + 1.2) % 360
+                    branding.Rotation = ang
+                end
+            end
+        end)
+
+        -- // SHINE SWEEP LOOP (Independent) //
+        task.spawn(function()
+            local shineOffset = -1.2
+            while task.wait() do
+                if _G.Unloaded or not branding.Parent then break end
+                if parent.Visible then
+                    shineOffset = shineOffset + 0.015
+                    if shineOffset > 1.2 then 
+                        shineOffset = -1.2
+                        task.wait(2.2) -- Only pauses the shine, not the rotation
+    end
+                    shine.Offset = Vector2.new(shineOffset, 0)
+                end
+            end
+        end)
+    end
+    buildRotatingLogo(state.Main)
+
+    --================ Startup System (Premium Glassmorphic Edition) =================--
+    local function createModernStartup(width, height)
+        local f = Instance.new("CanvasGroup", state.gui) 
+        f.Size = UDim2.new(0, width, 0, height); f.Position = UDim2.new(0.5, -width/2, 0.5, -height/2)
+        f.BackgroundColor3 = Color3.fromRGB(10, 10, 15); f.BackgroundTransparency = 0.2
+        f.BorderSizePixel = 0; f.Visible = false; f.ZIndex = 9000; f.GroupTransparency = 0
+        Instance.new("UICorner", f).CornerRadius = UDim.new(0, 20)
+        
+        -- Subtle Gloss Stroke
+    local s = Instance.new("UIStroke", f); s.Thickness = 1.2; s.Color = Color3.fromRGB(255, 255, 255); s.Transparency = 0.8
+        
+        -- Darkened Background Overlay (Legacy Style)
+    local blurOverlay = Instance.new("Frame", f)
+        blurOverlay.Size = UDim2.new(1, 0, 1, 0); blurOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+        blurOverlay.BackgroundTransparency = 0.6; blurOverlay.BorderSizePixel = 0; blurOverlay.ZIndex = 8999
+        Instance.new("UICorner", blurOverlay).CornerRadius = UDim.new(0, 20)
+        
+        -- High-Fidelity Background (Zero-Gap Legacy Masterpiece)
+    local bgImg = Instance.new("ImageLabel", f)
+        bgImg.Name = "BackgroundContent"
+        bgImg.Size = UDim2.new(1.25, 0, 1.25, 0); bgImg.Position = UDim2.new(-0.125, 0, -0.125, 0)
+        bgImg.BackgroundTransparency = 1; bgImg.Image = "rbxthumb://type=Asset&id=10532843797&w=420&h=420"
+        bgImg.ImageTransparency = 0.65 -- Faint Legacy Art
+        bgImg.ImageColor3 = Color3.fromRGB(220, 220, 230) -- Premium cooling tint
+        bgImg.ScaleType = Enum.ScaleType.Crop; bgImg.ZIndex = 9001
+        Instance.new("UICorner", bgImg).CornerRadius = UDim.new(0, 20)
+
+        -- Digital Noise
+    local noise = Instance.new("ImageLabel", f)
+        noise.Size = UDim2.new(1, 0, 1, 0); noise.BackgroundTransparency = 1; noise.Image = "rbxassetid://10532843797"; noise.ImageTransparency = 0.97
+        noise.ScaleType = Enum.ScaleType.Tile; noise.TileSize = UDim2.new(0, 128, 0, 128); noise.ZIndex = 12000; noise.Name = "Noise"
+        Instance.new("UICorner", noise).CornerRadius = UDim.new(0, 20)
+
+        -- High-Mobility Zero-Gap Parallax Engine (Inertia Mode)
+        task.spawn(function()
+            local currentX, currentY = 0, 0
+            local baseSize = 1.25 -- [Final Master Locked]
+    while task.wait() do
+                if not f or not f.Visible then task.wait(0.5) continue end
+                
+                local m = UIS:GetMouseLocation()
+                local center = Vector2.new(camera.ViewportSize.X/2, camera.ViewportSize.Y/2)
+                
+--                 for big floats)
+    local targetX = (m.X - center.X) / 22
+                local targetY = (m.Y - center.Y) / 22
+                
+                -- // 1. SMOOTH INERTIA (Lerp 0.05)
+                currentX = currentX + (targetX - currentX) * 0.05
+                currentY = currentY + (targetY - currentY) * 0.05
+                
+                -- // 2. AMBIENT BREATHING (Sine Loop)
+    local breathe = math.sin(tick() * 1.2) * 0.008
+                local dynamicScale = baseSize + breathe
+                
+                bgImg.Size = UDim2.new(dynamicScale, 0, dynamicScale, 0)
+                bgImg.Position = UDim2.fromScale(-((dynamicScale-1)/2), -((dynamicScale-1)/2)) + UDim2.fromOffset(-currentX, -currentY)
+            end
+        end)
+
+        makeDraggable(f)
+        return f
+    end
+
+    local function applyUltraStyle(obj, size, stroke)
+        obj.Font = Enum.Font.GothamBold
+        obj.TextSize = size or 14; obj.TextColor3 = Color3.new(1, 1, 1)
+        obj.TextTransparency = 0; obj.ZIndex = 11000
+        local s = obj:FindFirstChild("UIStroke") or Instance.new("UIStroke", obj)
+        s.Thickness = stroke or 1.1; s.Color = Color3.new(0, 0, 0); s.Transparency = 0; s.Enabled = true
+        return obj
+    end
+
+    local function glitchAnimation(label)
+        if label:FindFirstChild("GlitchActive") then return end
+        local active = Instance.new("BoolValue", label); active.Name = "GlitchActive"
+        local origPos = label.Position
+        
+        local r = label:Clone(); r.Parent = label.Parent; r.TextColor3 = Color3.new(1, 0, 0); r.ZIndex = label.ZIndex - 1; r:FindFirstChild("GlitchActive"):Destroy()
+        local b = label:Clone(); b.Parent = label.Parent; b.TextColor3 = Color3.new(0, 0, 1); b.ZIndex = label.ZIndex - 1; b:FindFirstChild("GlitchActive"):Destroy()
+        
+        task.spawn(function()
+            for i = 1, 10 do
+                local ox, oy = (math.random(-4, 4)), (math.random(-2, 2))
+                label.Position = origPos + UDim2.new(0, ox, 0, oy)
+                r.Position = origPos + UDim2.new(0, -ox, 0, -oy); r.TextTransparency = 0.5
+                b.Position = origPos + UDim2.new(0, ox/2, 0, -oy/2); b.TextTransparency = 0.5
+                task.wait(0.03)
+            end
+            label.Position = origPos; r:Destroy(); b:Destroy(); active:Destroy()
+        end)
+    end
+
+    do
+        -- Global Loading Screen
+    local loadingScreen = Instance.new("Frame", state.gui)
+        loadingScreen.Size = UDim2.new(1, 0, 1, 0); loadingScreen.BackgroundColor3 = Color3.new(0, 0, 0)
+        loadingScreen.BackgroundTransparency = 1; loadingScreen.ZIndex = 15000; loadingScreen.BorderSizePixel = 0; loadingScreen.Visible = false
+        local loadingLal = Instance.new("TextLabel", loadingScreen)
+        loadingLal.Size = UDim2.new(1, 0, 0, 50); loadingLal.Position = UDim2.new(0, 0, 0.5, -25); loadingLal.BackgroundTransparency = 1
+        loadingLal.Text = "LOADING PROFILE..."; applyUltraStyle(loadingLal, 24, 2.5)
+        loadingLal.TextTransparency = 1
+        Instance.new("UIGradient", loadingLal).Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(122, 92, 255)), ColorSequenceKeypoint.new(1, Color3.fromRGB(178, 107, 255))}
+
+        state.LoginFrame = createModernStartup(380, 420)
+        state.RegFrame = createModernStartup(380, 420)
+        state.GameFrame = createModernStartup(420, 320)
+        
+        local logF = state.LoginFrame
+        local regF = state.RegFrame
+        local gamF = state.GameFrame
+
+        -- // LOGIN UI //
+    local logLogo = Instance.new("ImageLabel", logF)
+        logLogo.Size = UDim2.new(0, 60, 0, 60); logLogo.Position = UDim2.new(0.5, -30, 0, 20); logLogo.BackgroundTransparency = 1; logLogo.Image = "rbxassetid://15444005710"; logLogo.ImageColor3 = Color3.fromHex("A970FF"); logLogo.ZIndex = 11000
+        
+        local logTitle = Instance.new("TextLabel", logF)
+        logTitle.Size = UDim2.new(1, 0, 0, 40); logTitle.Position = UDim2.new(0, 0, 0, 85); logTitle.BackgroundTransparency = 1; logTitle.Text = "krazz.cc"
+        applyUltraStyle(logTitle, 32, 0)
+        local lGlw = Instance.new("UIStroke", logTitle); lGlw.Thickness = 5; lGlw.Color = Color3.fromHex("C8A2FF"); lGlw.Transparency = 0.6
+        local lGrad = Instance.new("UIGradient", logTitle)
+        lGrad.Rotation = 45
+        lGrad.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0, Color3.fromHex("7A5CFF")),
+            ColorSequenceKeypoint.new(0.5, Color3.fromHex("C8A2FF")), 
+            ColorSequenceKeypoint.new(1, Color3.fromHex("7A5CFF"))
+        }
+
+        local function mkFld(parent, placeholder, yPos, isPass)
+            local container = Instance.new("Frame", parent)
+            container.Size = UDim2.new(1, -80, 0, 36); container.Position = UDim2.new(0, 40, 0, yPos); container.BackgroundColor3 = Color3.fromRGB(10, 10, 15); container.BackgroundTransparency = 0.3; container.BorderSizePixel = 0; Instance.new("UICorner", container).CornerRadius = UDim.new(0, 8); container.ZIndex = 10005
+            local stroke = Instance.new("UIStroke", container); stroke.Thickness = 1.1; stroke.Color = Color3.fromRGB(255, 255, 255); stroke.Transparency = 0.8
+            
+            local box = Instance.new("TextBox", container)
+            box.Size = UDim2.new(1, -20, 1, 0); box.Position = UDim2.new(0, 10, 0, 0); box.BackgroundTransparency = 1; box.PlaceholderText = placeholder; box.Text = ""; box.TextXAlignment = Enum.TextXAlignment.Center
+            applyUltraStyle(box, 14, 1.1); box.PlaceholderColor3 = Color3.fromRGB(150, 150, 160)
+
+            if isPass then
+                local mask = Instance.new("TextLabel", container); mask.Size = box.Size; mask.Position = box.Position; mask.BackgroundTransparency = 1; mask.Text = placeholder; mask.TextXAlignment = Enum.TextXAlignment.Center
+                applyUltraStyle(mask, 14, 1.1); mask.TextColor3 = Color3.fromRGB(150, 150, 160)
+                box.TextTransparency = 1; box.PlaceholderText = ""
+                box:GetPropertyChangedSignal("Text"):Connect(function() 
+                    box.TextTransparency = 1; if box.Text == "" then mask.Text = placeholder; mask.TextColor3 = Color3.fromRGB(150, 150, 160) else mask.Text = string.rep("*", #box.Text); mask.TextColor3 = Color3.fromRGB(255, 255, 255) end 
+                end)
+            end
+            -- Focus Effect: Massive Neon Nebula Glow
+            box.Focused:Connect(function() 
+                tween(stroke, TweenInfo.new(0.3), {Transparency = 0, Thickness = 3, Color = Color3.fromHex("C8A2FF")})
+            end)
+            box.FocusLost:Connect(function() 
+                tween(stroke, TweenInfo.new(0.3), {Transparency = 0.8, Thickness = 1.1, Color = Color3.fromRGB(255, 255, 255)})
+            end)
+            return box
+        end
+
+        local lUser = mkFld(logF, "Username...", 145, false)
+        local lPass = mkFld(logF, "Password...", 200, true)
+
+        -- Flash Overlay Frame
+    local lFlash = Instance.new("Frame", logF)
+        lFlash.Size = UDim2.new(1, 0, 1, 0); lFlash.BackgroundColor3 = Color3.new(1, 1, 1); lFlash.BackgroundTransparency = 1; lFlash.ZIndex = 20000; Instance.new("UICorner", lFlash).CornerRadius = UDim.new(0, 20)
+
+        local lBtn = Instance.new("TextButton", logF)
+        local lBP = UDim2.new(0, 40, 0, 270)
+        lBtn.Size = UDim2.new(1, -80, 0, 42); lBtn.Position = lBP; lBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255); lBtn.Text = ""; Instance.new("UICorner", lBtn).CornerRadius = UDim.new(0, 10); lBtn.ZIndex = 11000
+        local lBtnLal = Instance.new("TextLabel", lBtn); lBtnLal.Size = UDim2.new(1, 0, 1, 0); lBtnLal.BackgroundTransparency = 1; lBtnLal.Text = "Login"
+        applyUltraStyle(lBtnLal, 16, 0)
+        local lGrad = Instance.new("UIGradient", lBtn); lGrad.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromHex("A970FF")), ColorSequenceKeypoint.new(1, Color3.fromHex("7A5CFF"))}; lGrad.Rotation = 45
+        local lStk = Instance.new("UIStroke", lBtn); lStk.Thickness = 1.5; lStk.Color = Color3.fromHex("C8A2FF"); lStk.Transparency = 0.5
+        local lScale = Instance.new("UIScale", lBtn)
+        
+        lBtn.MouseEnter:Connect(function() 
+            tween(lBtn, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position = lBP + UDim2.new(0, 0, 0, -2)})
+            tween(lStk, TweenInfo.new(0.2), {Transparency = 0, Thickness = 4, Color = Color3.fromRGB(180, 130, 255)})
+        end)
+        lBtn.MouseLeave:Connect(function() 
+            tween(lBtn, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position = lBP})
+            tween(lStk, TweenInfo.new(0.2), {Transparency = 0.5, Thickness = 1.5, Color = Color3.fromRGB(160, 80, 255)})
+        end)
+        lBtn.MouseButton1Down:Connect(function() 
+            tween(lScale, TweenInfo.new(0.1), {Scale = 0.97})
+        end)
+        lBtn.MouseButton1Up:Connect(function() 
+            tween(lScale, TweenInfo.new(0.1), {Scale = 1})
+        end)
+        
+        local lToReg = Instance.new("TextButton", logF)
+        lToReg.Size = UDim2.new(1, -60, 0, 24); lToReg.Position = UDim2.new(0, 30, 0, 330); lToReg.BackgroundTransparency = 1; lToReg.Text = "Don't have an account? Register"; lToReg.TextScaled = true
+        applyUltraStyle(lToReg, state.isMobile and 10 or 12, 1.1)
+
+        -- // REGISTER UI //
+    local rLogo = Instance.new("ImageLabel", regF)
+        rLogo.Size = UDim2.new(0, 60, 0, 60); rLogo.Position = UDim2.new(0.5, -30, 0, 20); rLogo.BackgroundTransparency = 1; rLogo.Image = "rbxassetid://15444005710"; rLogo.ImageColor3 = Color3.fromRGB(160, 80, 255); rLogo.ZIndex = 10000
+        
+        local rTitle = Instance.new("TextLabel", regF)
+        rTitle.Size = UDim2.new(1, 0, 0, 30); rTitle.Position = UDim2.new(0, 0, 0, 85); rTitle.BackgroundTransparency = 1; rTitle.Text = "Register"
+        applyUltraStyle(rTitle, 28, 0)
+        local rGlw = Instance.new("UIStroke", rTitle); rGlw.Thickness = 5; rGlw.Color = Color3.fromHex("C8A2FF"); rGlw.Transparency = 0.6
+        Instance.new("UIGradient", rTitle).Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromHex("A970FF")), ColorSequenceKeypoint.new(1, Color3.fromHex("7A5CFF"))}
+
+        local rUser = mkFld(regF, "Username...", 135, false)
+        local rPass = mkFld(regF, "Password...", 190, true)
+        local rKey = mkFld(regF, "License Key...", 245, true)
+
+        -- Flash Overlay Frame
+    local rFlash = Instance.new("Frame", regF)
+        rFlash.Size = lFlash.Size; rFlash.BackgroundColor3 = lFlash.BackgroundColor3; rFlash.BackgroundTransparency = 1; rFlash.ZIndex = 20000; Instance.new("UICorner", rFlash).CornerRadius = UDim.new(0, 20)
+
+        local rBtn = Instance.new("TextButton", regF)
+        local rBP = UDim2.new(0, 40, 0, 300)
+        rBtn.Size = UDim2.new(1, -80, 0, 42); rBtn.Position = rBP; rBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255); rBtn.Text = ""; Instance.new("UICorner", rBtn).CornerRadius = UDim.new(0, 10); rBtn.ZIndex = 11000
+        local rBtnLal = Instance.new("TextLabel", rBtn); rBtnLal.Size = UDim2.new(1, 0, 1, 0); rBtnLal.BackgroundTransparency = 1; rBtnLal.Text = "Register"
+        applyUltraStyle(rBtnLal, 16, 0)
+        local rGrad = Instance.new("UIGradient", rBtn); rGrad.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromHex("A970FF")), ColorSequenceKeypoint.new(1, Color3.fromHex("7A5CFF"))}; rGrad.Rotation = 45
+        local rStk = Instance.new("UIStroke", rBtn); rStk.Thickness = 1.5; rStk.Color = Color3.fromHex("C8A2FF"); rStk.Transparency = 0.5
+        local rScale = Instance.new("UIScale", rBtn)
+
+        rBtn.MouseEnter:Connect(function() 
+            tween(rBtn, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position = rBP + UDim2.new(0, 0, 0, -2)})
+            tween(rStk, TweenInfo.new(0.2), {Transparency = 0, Thickness = 4, Color = Color3.fromRGB(180, 130, 255)})
+        end)
+        rBtn.MouseLeave:Connect(function() 
+            tween(rBtn, TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position = rBP})
+            tween(rStk, TweenInfo.new(0.2), {Transparency = 0.5, Thickness = 1.5, Color = Color3.fromRGB(160, 80, 255)})
+        end)
+        rBtn.MouseButton1Down:Connect(function() 
+            tween(rScale, TweenInfo.new(0.1), {Scale = 0.97})
+        end)
+        rBtn.MouseButton1Up:Connect(function() 
+            tween(rScale, TweenInfo.new(0.1), {Scale = 1})
+        end)
+        
+        local rToLog = Instance.new("TextButton", regF)
+        rToLog.Size = UDim2.new(1, -60, 0, 24); rToLog.Position = UDim2.new(0, 30, 0, 360); rToLog.BackgroundTransparency = 1; rToLog.Text = "Already have an account? Log in"; rToLog.TextScaled = true
+        applyUltraStyle(rToLog, state.isMobile and 10 or 12, 1.1)
+
+        -- // GAME SELECT UI //
+    local gamF = state.GameFrame
+        
+        local undetDot = Instance.new("Frame", gamF)
+        undetDot.Size = UDim2.new(0, 8, 0, 8); undetDot.Position = UDim2.new(0, 18, 0, 18); undetDot.BackgroundColor3 = Color3.fromRGB(0, 255, 120); undetDot.BorderSizePixel = 0; undetDot.ZIndex = 10005
+        Instance.new("UICorner", undetDot).CornerRadius = UDim.new(1, 0)
+        local undetLal = Instance.new("TextLabel", gamF)
+        undetLal.Size = UDim2.new(0, 100, 0, 20); undetLal.Position = UDim2.new(0, 31, 0, 12); undetLal.BackgroundTransparency = 1; undetLal.Text = "(Undetected status)"; undetLal.TextColor3 = Color3.fromRGB(0, 255, 120); undetLal.Font = Enum.Font.GothamBold; undetLal.TextSize = 13; undetLal.TextXAlignment = Enum.TextXAlignment.Left; undetLal.ZIndex = 10005
+        local undetStk = Instance.new("UIStroke", undetLal); undetStk.Thickness = 1.2; undetStk.Color = Color3.new(0,0,0); undetStk.Transparency = 0.5
+
+        local gTitle = Instance.new("TextLabel", gamF); gTitle.Size = UDim2.new(1, 0, 0, 40); gTitle.Position = UDim2.new(0, 0, 0, 35); gTitle.BackgroundTransparency = 1; gTitle.Text = "SELECT PROFILE"
+        applyUltraStyle(gTitle, 26, 2.5)
+        
+        -- Enhanced Hacker Glow
+    local gG1 = Instance.new("UIStroke", gTitle); gG1.Thickness = 6; gG1.Color = Color3.fromHex("C8A2FF"); gG1.Transparency = 0.6
+        local gG2 = Instance.new("UIStroke", gTitle); gG2.Thickness = 15; gG2.Color = Color3.fromHex("7A5CFF"); gG2.Transparency = 0.85
+        
+        local gGrad = Instance.new("UIGradient", gTitle)
+        gGrad.Rotation = 45
+        gGrad.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0, Color3.fromHex("7A5CFF")),
+            ColorSequenceKeypoint.new(0.5, Color3.fromHex("C8A2FF")),
+            ColorSequenceKeypoint.new(1, Color3.fromHex("7A5CFF"))
+        }
+
+        local function mkG(name, yPos)
+            local b = Instance.new("TextButton", gamF); b.Size = UDim2.new(0, 340, 0, 50); b.Position = UDim2.new(0.5, -170, 0, yPos); b.BackgroundColor3 = Color3.fromRGB(15, 10, 25); b.BackgroundTransparency = 0.7; b.Text = ""; b.ZIndex = 10010
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 12)
+            
+            local bLal = Instance.new("TextLabel", b); bLal.Size = UDim2.new(1, 0, 1, 0); bLal.BackgroundTransparency = 1; bLal.Text = name
+            applyUltraStyle(bLal, 15, 1.5)
+            
+            local s = Instance.new("UIStroke", b); s.Thickness = 1.2; s.Color = Color3.fromHex("C8A2FF"); s.Transparency = 0.8
+            local scale = Instance.new("UIScale", b)
+            local bBP = b.Position
+
+            b.MouseEnter:Connect(function() 
+                tween(b, TweenInfo.new(0.3), {Position = bBP + UDim2.new(0, 0, 0, -2), BackgroundTransparency = 0.3})
+                tween(s, TweenInfo.new(0.3), {Transparency = 0, Thickness = 2.5, Color = Color3.fromRGB(180, 130, 255)}) 
+            end)
+            b.MouseLeave:Connect(function() 
+                tween(b, TweenInfo.new(0.3), {Position = bBP, BackgroundTransparency = 0.7})
+                tween(s, TweenInfo.new(0.3), {Transparency = 0.8, Thickness = 1.2, Color = Color3.fromRGB(160, 80, 255)}) 
+            end)
+            b.MouseButton1Down:Connect(function() 
+                tween(scale, TweenInfo.new(0.1), {Scale = 0.97})
+            end)
+            b.MouseButton1Up:Connect(function() 
+                tween(scale, TweenInfo.new(0.1), {Scale = 1})
+            end)
+            return b
+        end
+        local b1 = mkG("Assassin vs Sheriff 2", 100); local b2 = mkG("Global / Counter Blox", 170)
+
+        -- // CONNECTIONS //
+        lToReg.MouseButton1Click:Connect(function() state.switchFrame(logF, regF, "left") end)
+        rToLog.MouseButton1Click:Connect(function() state.switchFrame(regF, logF, "right") end)
+
+        lBtn.MouseButton1Click:Connect(function()
+            if lBtnLal.Text == "AUTHENTICATING..." then return end -- Logic locking
+            glitchAnimation(logTitle)
+            lBtnLal.Text = "AUTHENTICATING..."
+            -- ColorSequence cannot be tweened via TweenService; using direct assignment
+            lGrad.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(140, 255, 170)), ColorSequenceKeypoint.new(1, Color3.fromRGB(80, 220, 120))}
+            lFlash.BackgroundTransparency = 0.5
+            tween(lFlash, TweenInfo.new(0.3), {BackgroundTransparency = 1})
+            
+            task.wait(1.2)  -- for impact
+    local u, p = lUser.Text, lPass.Text
+            if u == "" or p == "" then 
+                 lBtnLal.Text = "Fill all"; lBtnLal.TextColor3 = Color3.fromRGB(240, 80, 80); task.wait(1.5); lBtnLal.Text = "Login"
+                 -- Revert Gradient
+                 lGrad.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromHex("A970FF")), ColorSequenceKeypoint.new(1, Color3.fromHex("7A5CFF"))}
+                 lBtnLal.TextColor3 = Color3.fromRGB(220, 220, 230)
+            elseif state.accounts[u] and state.accounts[u] == p then 
+                lBtnLal.Text = "SUCCESSFUL"; lBtnLal.TextColor3 = Color3.fromRGB(255, 255, 255)
+                tween(logTitle, TweenInfo.new(0.4), {TextColor3 = Color3.fromRGB(0, 255, 120)})
+                tween(lGlw, TweenInfo.new(0.4), {Color = Color3.fromRGB(0, 255, 120), Transparency = 0.2})
+                task.wait(0.5)
+                state.switchFrame(logF, gamF, "left")
+            else 
+                lBtnLal.Text = "Bad Login"; lBtnLal.TextColor3 = Color3.fromRGB(240, 80, 80); task.wait(1.5); lBtnLal.Text = "Login"; lBtnLal.TextColor3 = Color3.fromRGB(220, 220, 230)
+            end
+        end)
+        
+        rBtn.MouseButton1Click:Connect(function()
+            if rBtnLal.Text == "AUTHENTICATING..." then return end
+            glitchAnimation(rTitle)
+            rBtnLal.Text = "AUTHENTICATING..."
+            rBtnLal.TextColor3 = Color3.fromRGB(0, 255, 0) -- Feedback: Success/Auth state
+            rFlash.BackgroundTransparency = 0.5
+            tween(rFlash, TweenInfo.new(0.3), {BackgroundTransparency = 1})
+
+            task.wait(1.2)
+            local u, p, k = rUser.Text, rPass.Text, rKey.Text
+            local KEYS = {['KRAZZ-LFT-0T2W']=true,['KRAZZ-LFT-0XKR']=true,['KRAZZ-LFT-2UFJ']=true,['KRAZZ-LFT-3KAO']=true,['KRAZZ-LFT-3LM1']=true,['KRAZZ-LFT-3R9D']=true,['KRAZZ-LFT-3SLT']=true,['KRAZZ-LFT-3TBS']=true,['KRAZZ-LFT-4OT9']=true,['KRAZZ-LFT-5JD1']=true,['KRAZZ-LFT-6K7P']=true,['KRAZZ-LFT-784R']=true,['KRAZZ-LFT-7V90']=true,['KRAZZ-LFT-7XSE']=true,['KRAZZ-LFT-92TK']=true,['KRAZZ-LFT-9V4N']=true,['KRAZZ-LFT-A5FN']=true,['KRAZZ-LFT-ANE6']=true,['KRAZZ-LFT-AOTI']=true,['KRAZZ-LFT-B2FZ']=true,['KRAZZ-LFT-CJ5H']=true,['KRAZZ-LFT-CJ9W']=true,['KRAZZ-LFT-CQOT']=true,['KRAZZ-LFT-D3WG']=true,['KRAZZ-LFT-DNPR']=true,['KRAZZ-LFT-EB75']=true,['KRAZZ-LFT-F74G']=true,['KRAZZ-LFT-G8VX']=true,['KRAZZ-LFT-GK53']=true,['KRAZZ-LFT-IG4T']=true,['KRAZZ-LFT-K1H2']=true,['KRAZZ-LFT-LN8J']=true,['KRAZZ-LFT-MHNF']=true,['KRAZZ-LFT-N54B']=true,['KRAZZ-LFT-O8ES']=true,['KRAZZ-LFT-P7HM']=true,['KRAZZ-LFT-Q46Y']=true,['KRAZZ-LFT-QM7O']=true,['KRAZZ-LFT-RF1I']=true,['KRAZZ-LFT-SFV6']=true,['KRAZZ-LFT-T24Y']=true,['KRAZZ-LFT-TI5Q']=true,['KRAZZ-LFT-V2IC']=true,['KRAZZ-LFT-V972']=true,['KRAZZ-LFT-VDMA']=true,['KRAZZ-LFT-VILQ']=true,['KRAZZ-LFT-WP6B']=true,['KRAZZ-LFT-WSZE']=true,['KRAZZ-LFT-XKRT']=true,['KRAZZ-LFT-ZDRV']=true}
+            if u == "" or p == "" or k == "" then 
+                rBtnLal.Text = "Fill all"; rBtnLal.TextColor3 = Color3.fromRGB(240, 80, 80); task.wait(1.5); rBtnLal.Text = "Register"; rBtnLal.TextColor3 = Color3.fromRGB(220, 220, 230)
+            elseif not KEYS[k] then 
+                rBtnLal.Text = "Bad License"; rBtnLal.TextColor3 = Color3.fromRGB(240, 80, 80); task.wait(1.5); rBtnLal.Text = "Register"; rBtnLal.TextColor3 = Color3.fromRGB(220, 220, 230)
+            else 
+                state.accounts[u]=p; lUser.Text=u; lPass.Text=p; rBtnLal.Text="Success"; rBtnLal.TextColor3 = Color3.fromRGB(0, 255, 120)
+                tween(rTitle, TweenInfo.new(0.4), {TextColor3 = Color3.fromRGB(0, 255, 120)})
+                tween(rGlw, TweenInfo.new(0.4), {Color = Color3.fromRGB(0, 255, 120), Transparency = 0.2})
+                task.wait(0.8); state.switchFrame(regF, logF, "right"); rBtnLal.Text="Register"; rBtnLal.TextColor3 = Color3.fromRGB(220, 220, 230)
+            end
+        end)
+
+        local function start() 
+            glitchAnimation(gTitle)
+            task.wait(0.2)
+            loadingScreen.Visible = true
+            tween(loadingScreen, TweenInfo.new(0.4), {BackgroundTransparency = 0})
+            tween(loadingLal, TweenInfo.new(0.4), {TextTransparency = 0})
+            
+            task.wait(0.8)
+            state.Authenticated=true; 
+            state.switchFrame(gamF, nil, "left")
+            task.delay(0.5, function() 
+                state.Main.Visible=true; 
+                if state.Backdrop then state.Backdrop.Visible = true end
+                if state.ToggleBtn then state.ToggleBtn.Visible = true end
+                if blurEffect then blurEffect.Size = 5.5 end
+                setCursorVisible(true) 
+                tween(loadingScreen, TweenInfo.new(0.5), {BackgroundTransparency = 1})
+                tween(loadingLal, TweenInfo.new(0.5), {TextTransparency = 1})
+                task.delay(0.5, function() loadingScreen.Visible = false end)
+            end) 
+        end
+        b1.MouseButton1Click:Connect(start); b2.MouseButton1Click:Connect(start); logF.Visible = true; if setCursorVisible then setCursorVisible(true) end
+    end
+    local function unloadScript()
+        _G.Unloaded = true
+        for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
+--         fore destroying GUI
+        pcall(function()
+            local l = game:GetService("Lighting")
+            for _, n in pairs({"KrazzSky","KrazzAtmosphere","KrazzBloom","KrazzDOF","KrazzSunRays","KrazzBlur","KrazzCC"}) do
+                local e = l:FindFirstChild(n); if e then pcall(function() e:Destroy() end) end
+            end
+            for _, v in ipairs(l:GetChildren()) do
+                if v:IsA("Sky") or (v:IsA("Atmosphere") and v.Name == "KrazzAtmosphere") then pcall(function() v:Destroy() end) end
+            end
+        end)
+        pcall(function()
+            for _, p in ipairs(game:GetService("Players"):GetPlayers()) do
+                local c = p.Character
+                if c then
+                    -- Remove all Highlights (Charm)
+    for _, v in ipairs(c:GetDescendants()) do
+                        if v:IsA("Highlight") then pcall(function() v.Adornee = nil; v.Enabled = false; v:Destroy() end) end
+                    end
+                    -- Restore part materials
+    local bc = c:FindFirstChildOfClass("BodyColors")
+                    for _, v in ipairs(c:GetDescendants()) do
+                        if v:IsA("BasePart") then
+                            pcall(function() v.Material = Enum.Material.Plastic; v.Transparency = 0 end)
+                        end
+                    end
+                    -- Restore hidden clothing
+    local hc = c:FindFirstChild("KrazzHiddenClothes")
+                    if hc then for _, ch in ipairs(hc:GetChildren()) do pcall(function() ch.Parent = c end) end; pcall(function() hc:Destroy() end) end
+                end
+            end
+        end)
+        pcall(function() state.gui:Destroy() end)
+        setCursorVisible(false)
+    end
+    
+    local function addClose(parent)
+        local c = Instance.new("TextButton", parent)
+        c.Size = UDim2.new(0, 24, 0, 24); c.Position = UDim2.new(1, -28, 0, 8); c.BackgroundTransparency = 1;         c.Text = "X"; c.TextColor3 = Color3.fromRGB(160, 80, 255); c.Font = Enum.Font.GothamBold; c.TextSize = 20; c.ZIndex = 11500
+        local s = Instance.new("UIScale", c)
+        c.MouseEnter:Connect(function() 
+            tween(c, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(255, 77, 109)})
+            tween(s, TweenInfo.new(0.2, Enum.EasingStyle.Back), {Scale = 1.3})
+        end)
+        c.MouseLeave:Connect(function() 
+            tween(c, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(160, 80, 255)})
+            tween(s, TweenInfo.new(0.2), {Scale = 1})
+        end)
+        c.MouseButton1Click:Connect(unloadScript)
+    end
+    addClose(state.LoginFrame); addClose(state.RegFrame); addClose(state.GameFrame)
+--=====================================================================--
+
+    --================ Hotkeys UI =================--
+    state.HotkeysUI = Instance.new("Frame", state.gui); state.HotkeysUI.Name = "Hotkeys"; state.HotkeysUI.Size = UDim2.new(0, 150, 0, 20); state.HotkeysUI.Position = UDim2.new(0, 20, 0, 150); state.HotkeysUI.BackgroundColor3 = Color3.fromRGB(6, 10, 19); state.HotkeysUI.BorderSizePixel = 0; Instance.new("UICorner", state.HotkeysUI).CornerRadius = UDim.new(0, 5)
+    local hkStroke = Instance.new("UIStroke", state.HotkeysUI); hkStroke.Color = Color3.fromRGB(230, 70, 70); hkStroke.Thickness = 1; hkStroke.Transparency = 0.5
+    local hkTitle = Instance.new("TextLabel", state.HotkeysUI); hkTitle.Size = UDim2.new(1, 0, 0, 20); hkTitle.BackgroundTransparency = 1; hkTitle.Text = "HOTKEYS"; hkTitle.TextColor3 = Color3.fromRGB(230, 70, 70); hkTitle.Font = Enum.Font.GothamBold; hkTitle.TextSize = 12
+    local hks = Instance.new("UIStroke", hkTitle); hks.Thickness = 1; hks.Color = Color3.new(0,0,0); hks.Transparency = 0.5
+    local hkLayout = Instance.new("UIListLayout", state.HotkeysUI); hkLayout.SortOrder = Enum.SortOrder.LayoutOrder; hkLayout.Padding = UDim.new(0, 2); hkLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    Instance.new("UIPadding", state.HotkeysUI).PaddingTop = UDim.new(0, 20)
+    makeDraggable(state.HotkeysUI)
+    
+    local activeModulesList = {"Enable Aimbot", "Enable Silent Aim", "Enable ESP", "Enable Triggerbot", "Enable AntiAim"}
+    local hkLabelsTable = {}
+    for _, md in ipairs(activeModulesList) do
+        local lbl = Instance.new("TextLabel", state.HotkeysUI); lbl.Size = UDim2.new(1, -20, 0, 15); lbl.BackgroundTransparency = 1; lbl.Text = md:gsub("Enable ", ""); lbl.TextColor3 = Color3.fromRGB(200, 200, 200); lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 12; lbl.Visible = false; lbl.TextXAlignment = Enum.TextXAlignment.Left
+        local st = Instance.new("TextLabel", lbl); st.Size = UDim2.new(0, 60, 1, 0); st.Position = UDim2.new(1, -60, 0, 0); st.BackgroundTransparency = 1; st.Text = "[ON]"; st.TextColor3 = Color3.fromRGB(0, 255, 0); st.Font = Enum.Font.GothamBold; st.TextSize = 12; st.TextXAlignment = Enum.TextXAlignment.Right
+        hkLabelsTable[md] = lbl
+    end
+    
+    task.spawn(function()
+        while task.wait(0.1) do
+            if _G.Unloaded then break end
+            local activeCount = 0
+            if config["Hotkeys UI"] then
+                for md, lbl in pairs(hkLabelsTable) do
+                    if config[md] then
+                        lbl.Visible = true; activeCount = activeCount + 1
+                        local modeStr = "[ON]"; local shortName = md:gsub("Enable ", "")
+                        if shortName == "Aimbot" then modeStr = "[" .. (config["Aimbot Mode"] or "Hold") .. "]"
+                        elseif shortName == "Silent Aim" then modeStr = "[" .. (config["Silent Aim Mode"] or "Always") .. "]"
+                        elseif shortName == "Triggerbot" then modeStr = "[Auto]" end
+                        local st = lbl:FindFirstChildOfClass("TextLabel")
+                        if st then st.Text = modeStr end
+                    else lbl.Visible = false end
+                end
+            end
+            state.HotkeysUI.Size = UDim2.new(0, 150, 0, 45 + (activeCount * 17))
+            if not state.Authenticated then state.HotkeysUI.Visible = false; continue end
+        state.HotkeysUI.Visible = config["Hotkeys UI"] and (activeCount > 0 or state.Main.Visible)
+        end
+    end)
+    
+    --================ Sidebar =================--
+    state.Sidebar = Instance.new("Frame", state.Main)
+    state.Sidebar.Size = UDim2.new(0, 160, 1, 0)
+    state.Sidebar.BackgroundColor3 = Color3.fromRGB(12, 14, 25)
+    state.Sidebar.BackgroundTransparency = 0.05; state.Sidebar.BorderSizePixel = 0; state.Sidebar.ZIndex = 5; state.Sidebar.Active = false
+    state.Sidebar.ClipsDescendants = false
+    local sGrad = Instance.new("UIGradient", state.Sidebar); sGrad.Rotation = 90
+    sGrad.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(18, 31, 57)), ColorSequenceKeypoint.new(0.5, Color3.fromRGB(24, 40, 75)), ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 31, 57))}
+    local SidebarCorner = Instance.new("UICorner", state.Sidebar); SidebarCorner.CornerRadius = UDim.new(0, 10)
+    
+    -- : LogoBoxRAZZ
+    
+    state.LogoBox = Instance.new("Frame", state.Sidebar)
+    if state.LogoBox then
+        state.LogoBox.Name = "LogoBox"
+        state.LogoBox.Size = UDim2.new(1, 0, 0, 48)
+        state.LogoBox.Position = UDim2.new(0, 0, 0, 8)
+        state.LogoBox.BackgroundTransparency = 1
+        state.LogoBox.BorderSizePixel = 0
+        state.LogoBox.ZIndex = 6
+        state.LogoBox.Active = false
+        state.LogoBox.ClipsDescendants = false
+    end
+
+    local Logo = Instance.new("TextLabel", state.LogoBox)
+    Logo.Size = UDim2.new(1, -38, 1, 0)
+    Logo.Position = UDim2.new(0, 38, 0, 0)  
+    Logo.Text = "Krazz.cc"
+    Logo.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Logo.TextTransparency = 0 -- Vibrant visibility restore
+    Logo.TextSize = 26
+    Logo.Font = Enum.Font.GothamBold
+    Logo.ZIndex = 7
+    Logo.TextXAlignment = Enum.TextXAlignment.Left
+    Logo.BackgroundTransparency = 1
+    
+    local logoGrad = Instance.new("UIGradient", Logo)
+    logoGrad.Rotation = 45 -- Diagonal Gradient
+    logoGrad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0, Color3.fromHex("7A5CFF")),
+        ColorSequenceKeypoint.new(0.5, Color3.fromHex("C8A2FF")),
+        ColorSequenceKeypoint.new(1, Color3.fromHex("7A5CFF"))
+    }
+
+    local whiteStroke = Instance.new("UIStroke", Logo)
+    whiteStroke.Thickness = 1.0 -- Thin white stroke
+    
+    -- // SITTING CHARACTER (Asset: 5376401451) //
+    local sitChar = Instance.new("ImageLabel", Logo)
+    sitChar.Name = "SitChar"
+    sitChar.Size = UDim2.new(0, 32, 0, 32)
+    sitChar.Position = UDim2.new(0, 8, 0, -20) -- Slightly lower and smaller to match logo scale
+    sitChar.BackgroundTransparency = 1; sitChar.Image = "rbxassetid://5376401451"; sitChar.ScaleType = Enum.ScaleType.Fit; sitChar.ZIndex = 12
+    whiteStroke.Color = Color3.new(1, 1, 1) -- Strict white
+    whiteStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
+    whiteStroke.Transparency = 0
+    
+    local strokeGrad = Instance.new("UIGradient", whiteStroke)
+    strokeGrad.Rotation = 0 -- Horizontal progressive draw
+    strokeGrad.Transparency = NumberSequence.new{
+        -- Progressive drawing beam along horizontal axis
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(0.48, 1),
+        NumberSequenceKeypoint.new(0.5, 0), -- Sharp drawing point
+        NumberSequenceKeypoint.new(0.52, 1),
+        NumberSequenceKeypoint.new(1, 1)
+    }
+
+    task.spawn(function()
+        local offset = -1.2
+        while task.wait() do
+            if _G.Unloaded then break end
+            offset = offset + 0.012  -- for better visibility
+    if offset > 1.2 then offset = -1.2 end
+            strokeGrad.Offset = Vector2.new(offset, 0)
+        end
+    end)
+
+    state.LogoUnderline = Instance.new("Frame", state.LogoBox)
+    state.LogoUnderline.Size = UDim2.new(0, 100, 0, 1.5)
+    state.LogoUnderline.Position = UDim2.new(0, 38, 1, -4)
+    state.LogoUnderline.BorderSizePixel = 0
+    state.LogoUnderline.ZIndex = 8
+    local luGrad = Instance.new("UIGradient", state.LogoUnderline)
+    luGrad.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(230, 60, 60)), ColorSequenceKeypoint.new(1, Color3.fromRGB(160, 80, 255))}
+    luGrad.Transparency = NumberSequence.new{NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1)}
+
+-- Removed thicker LogoStroke to keep letters pure Red
+
+    state.TabContainer = Instance.new("Frame", state.Sidebar)
+    state.TabContainer.Name = "TabContainer"
+    state.TabContainer.Size = UDim2.new(1, 0, 1, -70)
+    state.TabContainer.Position = UDim2.new(0, 0, 0, 65) -- Aligned with Logo vertical axis
+    state.TabContainer.BackgroundTransparency = 1
+    state.TabContainer.ZIndex = 6
+    state.TabContainer.Active = false
+
+    local TabListLayout = Instance.new("UIListLayout", state.TabContainer)
+    TabListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    TabListLayout.Padding = UDim.new(0, 4)
+    TabListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+
+    --================ Content Area =================--
+    state.Content = Instance.new("Frame", state.Main)
+    state.Content.Position = UDim2.new(0, 160, 0, 0)
+    state.Content.Size = UDim2.new(1, -160, 1, 0)
+    state.Content.BackgroundTransparency = 1
+    state.Content.Active = false
+    state.Content.ClipsDescendants = false
+    state.Content.ZIndex = 50  -- for absolute visibility
+-- Tabs handles via atomic registry at top
+
+local TAB_ICONS = {
+    ["AIMBOT"] = "rbxthumb://type=Asset&id=13800031135&w=150&h=150",
+    ["SILENT AIM"] = "rbxthumb://type=Asset&id=6531224703&w=150&h=150",
+    ["VISUALS"] = "rbxthumb://type=Asset&id=17412298170&w=150&h=150",
+    ["TRIGGERBOT"] = "rbxthumb://type=Asset&id=93919112736878&w=150&h=150",
+    ["MOVEMENT"] = "rbxthumb://type=Asset&id=75489261735315&w=150&h=150",
+    ["MISC"] = "rbxthumb://type=Asset&id=88077494511915&w=150&h=150",
+    ["ANTIAIM"] = "rbxthumb://type=Asset&id=112532052485702&w=150&h=150",
+    ["Player"] = "rbxthumb://type=Asset&id=15444005702&w=150&h=150",
+    ["SETTINGS"] = "rbxthumb://type=Asset&id=7059346386&w=150&h=150",
+    ["MOVEDARK"] = "rbxthumb://type=Asset&id=15444005713&w=150&h=150"
+}
+
+-- Registry update to use TAB_ICONS (Already integrated in setup)
+
+function createTab(name, y, iconId, order)
+    local btn = Instance.new("TextButton", state.TabContainer)
+
+    btn.Name = name
+    btn.Size = UDim2.new(0, 130, 0, 42)
+    btn.Position = UDim2.new(0, 38, 0, y) -- Exact alignment with Logo text start
+    btn.Text = "" 
+    btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    btn.BackgroundTransparency = 1
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    local btnStroke = Instance.new("UIStroke", btn)
+    btnStroke.Thickness = 2.4; btnStroke.Color = Color3.fromRGB(160, 80, 255); btnStroke.Transparency = 0.75
+    
+    btn.LayoutOrder = order
+
+    local textLabel = Instance.new("TextLabel", btn)
+    textLabel.Size = UDim2.new(1, -20, 1, 0); textLabel.Position = UDim2.new(0, 38, 0, 0); textLabel.BackgroundTransparency = 1; textLabel.Text = name; textLabel.TextColor3 = Color3.fromRGB(200, 180, 255); textLabel.TextXAlignment = Enum.TextXAlignment.Left; textLabel.Font = Enum.Font.GothamMedium; textLabel.TextSize = 13
+
+    local icon = Instance.new("ImageLabel", btn)
+    icon.Size = UDim2.new(0, 20, 0, 20); icon.Position = UDim2.new(0, 12, 0.5, -10); icon.BackgroundTransparency = 1; icon.Image = iconId or ""; icon.ImageColor3 = Color3.fromRGB(255, 255, 255); icon.ScaleType = Enum.ScaleType.Fit
+
+    local page = Instance.new("Frame", state.Content); page.Name = name .. "Page"; page.Size = UDim2.new(1, 0, 1, 0); page.Visible = false; page.BackgroundTransparency = 1
+    state.tabs[name] = page; state.tabButtons[name] = btn
+    btn.MouseButton1Click:Connect(function()
+        for name, p in pairs(state.tabs) do
+            p.Visible = (name == btn.Name)
+            if state.tabButtons[name] then
+                state.tabButtons[name].BackgroundTransparency = (name == btn.Name) and 0.92 or 1
+            end
+        end
+    end)
+    return btn
+end
+
+createTab("AIMBOT", 80, "rbxthumb://type=Asset&id=13800031135&w=150&h=150", 1)
+createTab("SILENT AIM", 110, "rbxthumb://type=Asset&id=6531224703&w=150&h=150", 2)
+createTab("VISUALS", 140, "rbxthumb://type=Asset&id=17412298170&w=150&h=150", 3)
+createTab("TRIGGERBOT", 170, "rbxthumb://type=Asset&id=93919112736878&w=150&h=150", 4)
+createTab("MISC", 200, "rbxthumb://type=Asset&id=88077494511915&w=150&h=150", 5)
+createTab("ANTIAIM", 230, "rbxthumb://type=Asset&id=112532052485702&w=150&h=150", 6)
+createTab("MOVEMENT", 260, "rbxthumb://type=Asset&id=75489261735315&w=150&h=150", 7)
+createTab("SETTINGS", 290, "rbxthumb://type=Asset&id=7059346386&w=150&h=150", 8)
+
+
+
+-- ANTIAIM Icon Setup
+task.defer(function()
+    local aaBtn = state.tabButtons["ANTIAIM"]
+    if aaBtn then
+        local rightIcon = Instance.new("ImageLabel", aaBtn)
+        rightIcon.Size = UDim2.new(0, 18, 0, 18); rightIcon.Position = UDim2.new(1, -22, 0.5, -9); rightIcon.BackgroundTransparency = 1; rightIcon.Image = "rbxassetid://85167827547177"; rightIcon.ImageColor3 = Color3.fromRGB(230, 70, 70); rightIcon.ZIndex = 9
+    end
+end)
+
+task.defer(function()
+    local aimBtn = state.tabButtons["AIMBOT"]
+    if not aimBtn then return end
+    local aimLabel = aimBtn:FindFirstChild("TextLabel")
+    local aimBar = aimBtn:FindFirstChild("AccentBar")
+    if aimLabel then aimLabel.TextColor3 = Color3.fromRGB(255, 255, 255) end
+    if aimBar then aimBar.BackgroundTransparency = 0 end
+    if state.tabs["AIMBOT"] then state.tabs["AIMBOT"].Visible = true end
+end)
+
+--================ Components =================--
+-- LAYOUT: Reverted to Absolute Positioning (X/Y)
+function createSection(parent, name, x, width, height, yOverride, iconId)
+    if not parent then
+        return Instance.new("ScrollingFrame") -- Graceful fail
+    end
+    local h = height or 300
+    local w = width or 300
+    local secY = yOverride or 35
+    if not yOverride then
+        local ok, children = pcall(function() return parent:GetChildren() end)
+        if ok and children then
+            for _, sibling in ipairs(children) do
+                if sibling:IsA("Frame") and sibling ~= parent and math.abs(sibling.Position.X.Offset - x) < 10 then
+                    secY = math.max(secY, sibling.Position.Y.Offset + sibling.Size.Y.Offset + 20)
+                end
+            end
+        end
+    end
+    
+    local secFrame = Instance.new("Frame", parent)
+    secFrame.Size = UDim2.new(0, w, 0, h)
+    secFrame.Position = UDim2.new(0, x, 0, secY)
+    
+    -- Hierarchical Brightness Variations
+    local upperName = name:upper()
+    local baseColor = Color3.fromRGB(12, 17, 30) -- Default Card
+    if upperName:find("ADVANCED") then
+        baseColor = Color3.fromRGB(10, 12, 22) -- Darker (Heavier)
+    elseif upperName:find("PREDICTION") or upperName:find("MAIN") then
+        baseColor = Color3.fromRGB(20, 24, 45) -- Brighter (Elevated)
+    end
+    
+    secFrame.BackgroundColor3 = baseColor
+    secFrame.BackgroundTransparency = 0.35
+    secFrame.BorderSizePixel = 0
+    secFrame.Active = false
+    Instance.new("UICorner", secFrame).CornerRadius = UDim.new(0, 8)
+    
+    local secBG = Instance.new("ImageLabel", secFrame)
+    secBG.Name = "SectionBackground"
+    secBG.Size = UDim2.new(1, 0, 1, 0)
+    secBG.BackgroundTransparency = 1
+    secBG.Image = "rbxassetid://251894283"
+    secBG.ImageTransparency = 0.98
+    secBG.ScaleType = Enum.ScaleType.Stretch
+    secBG.ZIndex = 59
+    Instance.new("UICorner", secBG).CornerRadius = UDim.new(0, 8)
+    
+    local stroke = Instance.new("UIStroke", secFrame)
+    stroke.Color = Color3.fromRGB(230, 70, 70)
+    stroke.Thickness = 1.2
+    stroke.Transparency = 0.5
+    
+    local title = Instance.new("TextLabel", secFrame)
+    title.Text = name:upper()
+    title.Size = UDim2.new(1, -30, 0, 35)
+    title.Position = UDim2.new(0, 15, 0, 0)
+    title.BackgroundTransparency = 1
+    title.TextColor3 = Color3.fromRGB(230, 70, 70)
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Font = Enum.Font.GothamBold
+    local tts = Instance.new("UIStroke", title); tts.Thickness = 1; tts.Color = Color3.new(0,0,0); tts.Transparency = 0.5
+    title.TextSize = 13
+
+    if iconId then
+        local secIcon = Instance.new("ImageLabel", secFrame)
+        secIcon.Size = UDim2.new(0, 16, 0, 16); secIcon.Position = UDim2.new(1, -26, 0, 10); secIcon.BackgroundTransparency = 1; secIcon.Image = iconId; secIcon.ImageColor3 = Color3.fromRGB(230, 70, 70); secIcon.ZIndex = 61
+    end
+
+    local container = Instance.new("ScrollingFrame", secFrame)
+    container.Size = UDim2.new(1, -10, 1, -45)
+    container.Position = UDim2.new(0, 5, 0, 40)
+    container.BackgroundTransparency = 1
+    container.BorderSizePixel = 0
+    container.ScrollBarThickness = 1
+    container.ScrollBarImageColor3 = Color3.fromRGB(230, 70, 70)
+    container.Active = true
+    container.ScrollingEnabled = true
+    container.CanvasSize = UDim2.new(0, 0, 0, 1000)
+    container.ClipsDescendants = true -- Prevents features overflowing outside the section box
+    container.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    
+    local layout = Instance.new("UIListLayout", container)
+    layout.Padding = UDim.new(0, 8)
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    
+    local function updateScroll()
+        if not layout or not container then return end
+        local ok, cs = pcall(function() return layout.AbsoluteContentSize end)
+        if ok and cs then
+            container.CanvasSize = UDim2.new(0, 0, 0, cs.Y + 20)
+        end
+    end
+    
+--     for all executors: GetPropertyChangedSignal + Child events + Render polling
+    if layout then
+        pcall(function() layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateScroll) end)
+    end
+    container.ChildAdded:Connect(function() task.defer(updateScroll) end)
+    container.ChildRemoved:Connect(function() task.defer(updateScroll) end)
+    
+    task.spawn(function()
+        while task.wait(1) do
+            if not container or not container.Parent then break end
+            pcall(updateScroll)
+        end
+    end)
+    
+    pcall(updateScroll)
+
+    Instance.new("UIPadding", container).PaddingTop = UDim.new(0, 5)
+    
+--     for visibility
+    secFrame.ZIndex = 60
+    title.ZIndex = 61
+    container.ZIndex = 62
+    
+    return container
+end
+
+function toggle(parent, text)
+    local highlight = (text:find("^Enable ") or text == "Skeleton")
+    local frame = Instance.new("Frame", parent)
+    frame.Size = UDim2.new(1, -20, 0, 36)
+    frame.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+    frame.BackgroundTransparency = 0.5
+    frame.ZIndex = 11
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+    
+    local t = Instance.new("TextLabel", frame)
+    t.Text = text; t.Size = UDim2.new(1, -86, 1, 0); t.Position = UDim2.new(0, 12, 0, 0); t.BackgroundTransparency = 1
+    t.TextColor3 = Color3.fromRGB(240, 240, 245)
+    t.TextXAlignment = Enum.TextXAlignment.Left; t.Font = Enum.Font.GothamBold; t.TextSize = 13
+    local ts = Instance.new("UIStroke", t); ts.Thickness = 1.2; ts.Transparency = 0.5; ts.Color = Color3.new(0,0,0)
+    
+    local b = Instance.new("TextButton", frame)
+    b.Size = UDim2.new(0, 34, 0, 18); b.Position = UDim2.new(1, -44, 0.5, -9)
+    b.BackgroundColor3 = config[text] and Color3.fromRGB(230, 60, 60) or Color3.fromRGB(60, 110, 230); b.Text = ""
+    Instance.new("UICorner", b).CornerRadius = UDim.new(1, 0)
+    local bs = Instance.new("UIStroke", b); bs.Thickness = 2.5; bs.Color = b.BackgroundColor3; bs.Transparency = 0.6; bs.Enabled = config[text]
+    
+    local dot = Instance.new("Frame", b)
+    dot.Size = UDim2.new(0, 14, 0, 14); dot.Position = config[text] and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+    dot.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+    
+    local clickableArea = Instance.new("TextButton", frame)
+    clickableArea.Size = UDim2.new(1, 0, 1, 0); clickableArea.Position = UDim2.new(0, 0, 0, 0)
+    clickableArea.BackgroundTransparency = 1; clickableArea.Text = ""; clickableArea.Active = false; clickableArea.Selectable = false
+    
+    clickableArea.MouseEnter:Connect(function() tween(frame, TweenInfo.new(0.2), {BackgroundTransparency = 0}) end)
+    clickableArea.MouseLeave:Connect(function() tween(frame, TweenInfo.new(0.2), {BackgroundTransparency = 0.5}) end)
+    
+    local function setVisual(val)
+        local targetColor = val and Color3.fromRGB(230, 60, 60) or Color3.fromRGB(60, 110, 230)
+        tween(b, TweenInfo.new(0.2), {BackgroundColor3 = targetColor})
+        tween(bs, TweenInfo.new(0.2), {Color = targetColor, Enabled = val})
+        tween(dot, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = val and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)})
+    end
+    uiRegistry[text] = setVisual
+
+    clickableArea.MouseButton1Click:Connect(function()
+        config[text] = not config[text]
+        setVisual(config[text])
+    end)
+    return frame
+end
+
+function slider(parent, text, min, max, decimal)
+    local frame = Instance.new("Frame", parent)
+    frame.Size = UDim2.new(1, -20, 0, 48)
+    frame.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+    frame.BackgroundTransparency = 0.5
+    frame.ZIndex = 11
+    frame.Active = true
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+    
+    local l = Instance.new("TextLabel", frame); l.Text = text; l.Size = UDim2.new(1, -65, 0, 24); l.Position = UDim2.new(0, 12, 0, 4); l.BackgroundTransparency = 1
+    l.TextColor3 = Color3.fromRGB(240, 240, 245); l.TextXAlignment = Enum.TextXAlignment.Left; l.Font = Enum.Font.GothamBold; l.TextSize = 13
+    local ls = Instance.new("UIStroke", l); ls.Thickness = 1.2; ls.Transparency = 0.5; ls.Color = Color3.new(0,0,0)
+    
+    local initialValue = config[text] or min
+    local valBox = Instance.new("TextBox", frame); valBox.Text = tostring(initialValue); valBox.Size = UDim2.new(0, 40, 0, 20); valBox.Position = UDim2.new(1, -52, 0, 6); valBox.BackgroundColor3 = Color3.fromRGB(33, 33, 38); valBox.TextColor3 = Color3.fromRGB(230, 90, 90); valBox.Font = Enum.Font.GothamBold; valBox.TextSize = 12
+    local vbs = Instance.new("UIStroke", valBox); vbs.Thickness = 1; vbs.Color = Color3.new(0,0,0); vbs.Transparency = 0.5
+    Instance.new("UICorner", valBox).CornerRadius = UDim.new(0, 4)
+    
+    local bg = Instance.new("Frame", frame); bg.Size = UDim2.new(1, -24, 0, 6); bg.Position = UDim2.new(0, 12, 0, 38); bg.BackgroundColor3 = Color3.fromRGB(45, 45, 52); bg.BorderSizePixel = 0
+    Instance.new("UICorner", bg).CornerRadius = UDim.new(1, 0)
+    
+    local fill = Instance.new("Frame", bg); fill.Size = UDim2.new((initialValue - min) / (max - min), 0, 1, 0); fill.BackgroundColor3 = Color3.fromRGB(230, 60, 60); fill.BorderSizePixel = 0
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+    local fs = Instance.new("UIStroke", fill); fs.Thickness = 2.5; fs.Color = fill.BackgroundColor3; fs.Transparency = 0.6; fs.Enabled = true
+
+    local clickableArea = Instance.new("TextButton", frame)
+    clickableArea.Size = UDim2.new(1, 0, 1, 0)
+    clickableArea.Position = UDim2.new(0, 0, 0, 0)
+    clickableArea.BackgroundTransparency = 1
+    clickableArea.Text = ""
+
+    local lastValue = state.config[text] or min
+    local function update(inputPer)
+        local per = math.clamp(inputPer, 0, 1); local val = min + (max - min) * per
+        if not decimal then val = math.floor(val) else val = math.floor(val * 1000) / 1000 end
+        state.config[text] = val; valBox.Text = tostring(val)
+        pcall(function() tween(fill, TweenInfo.new(0.1), {Size = UDim2.new(per, 0, 1, 0)}) end)
+    end
+    state.uiRegistry[text] = function(val) update((val - min) / (max - min)) end
+
+    clickableArea.InputBegan:Connect(function(input)
+        local isMouse = input.UserInputType == Enum.UserInputType.MouseButton1
+        local isTouch = input.UserInputType == Enum.UserInputType.Touch
+        if isMouse or isTouch then
+            if state.Main then state.Main.Active = false end
+            local disabledScrs = {}
+            local f = frame
+            while true do
+                local s = f:FindFirstAncestorOfClass("ScrollingFrame")
+                if not s then break end
+                s.ScrollingEnabled = false
+                table.insert(disabledScrs, s)
+                f = s
+            end
+            -- Initial position update
+            update((input.Position.X - bg.AbsolutePosition.X) / bg.AbsoluteSize.X)
+
+            local move; move = UIS.InputChanged:Connect(function(input2)
+                if input2.UserInputType == Enum.UserInputType.MouseMovement
+                    or input2.UserInputType == Enum.UserInputType.Touch then
+                    update((input2.Position.X - bg.AbsolutePosition.X) / bg.AbsoluteSize.X)
+                end
+            end)
+            local endConn; endConn = UIS.InputEnded:Connect(function(input3)
+                if input3.UserInputType == Enum.UserInputType.MouseButton1
+                    or input3.UserInputType == Enum.UserInputType.Touch then
+                    for _, s in ipairs(disabledScrs) do s.ScrollingEnabled = true end
+                    move:Disconnect()
+                    endConn:Disconnect()
+                    if state.Main then state.Main.Active = true end
+                end
+            end)
+        end
+    end)
+
+    valBox.FocusLost:Connect(function() local n = tonumber(valBox.Text); if n then n = math.clamp(n, min, max); update((n - min) / (max - min)) else valBox.Text = tostring(config[text]) end end)
+end
+
+function colorPicker(parent, text, defaultColor)
+    local frame = Instance.new("Frame", parent)
+    frame.Size = UDim2.new(1, -20, 0, 32)
+    frame.BackgroundColor3 = Color3.fromRGB(26, 26, 30)
+    frame.ZIndex = 11
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+    
+    local title = Instance.new("TextLabel", frame)
+    title.Text = text; title.Size = UDim2.new(1, -40, 1, 0); title.Position = UDim2.new(0, 12, 0, 0)
+    title.BackgroundTransparency = 1; title.TextColor3 = Color3.fromRGB(240, 240, 245)
+    title.TextXAlignment = Enum.TextXAlignment.Left; title.Font = Enum.Font.GothamMedium; title.TextSize = 12
+    local ts = Instance.new("UIStroke", title); ts.Thickness = 1.2; ts.Transparency = 0.5; ts.Color = Color3.new(0,0,0)
+
+    inlineColorPicker(frame, text, defaultColor, UDim2.new(1, -30, 0.5, -8))
+end
+
+function inlineColorPicker(toggleFrame, configKey, defaultColor, customPos)
+    if not toggleFrame then return end
+    local initColor = config[configKey] or defaultColor or Color3.fromRGB(230, 70, 70)
+    config[configKey] = initColor
+    local swatch = Instance.new("TextButton", toggleFrame)
+    swatch.Name = "ColorSwatch_" .. configKey
+    swatch.Size = UDim2.new(0, 18, 0, 18) -- Noticeable square
+    swatch.Position = customPos or UDim2.new(1, -78, 0.5, -9)  -- Sits left of the toggle switch (at -44) with gap
+    swatch.BackgroundColor3 = initColor
+    swatch.Text = ""; swatch.ZIndex = 30; swatch.AutoButtonColor = false
+    Instance.new("UICorner", swatch).CornerRadius = UDim.new(0, 2) -- Sharp square look
+    local swStroke = Instance.new("UIStroke", swatch); swStroke.Thickness = 1; swStroke.Color = Color3.new(0,0,0); swStroke.Transparency = 0.5
+    local popup = Instance.new("Frame", state.gui)
+    popup.Name = "InlinePickerPopup_" .. configKey
+    popup.Size = UDim2.new(0, 220, 0, 130); popup.BackgroundColor3 = Color3.fromRGB(8,12,22)
+    popup.BorderSizePixel = 0; popup.ZIndex = 9500; popup.Visible = false; popup.Active = true
+    Instance.new("UICorner", popup).CornerRadius = UDim.new(0, 8)
+    local popStroke = Instance.new("UIStroke", popup); popStroke.Thickness = 1.2; popStroke.Color = Color3.fromRGB(160,80,255); popStroke.Transparency = 0.35
+    makeDraggable(popup)
+    local titleBar = Instance.new("Frame", popup); titleBar.Size = UDim2.new(1,0,0,26); titleBar.BackgroundColor3 = Color3.fromRGB(15,22,38); titleBar.BorderSizePixel = 0; Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0,8)
+    local titleLbl = Instance.new("TextLabel", titleBar); titleLbl.Size = UDim2.new(1,-30,1,0); titleLbl.Position = UDim2.new(0,10,0,0); titleLbl.BackgroundTransparency=1; titleLbl.Text=configKey; titleLbl.TextColor3=Color3.fromRGB(200,180,255); titleLbl.Font=Enum.Font.GothamBold; titleLbl.TextSize = 10; titleLbl.TextXAlignment=Enum.TextXAlignment.Left
+    local closeBtn = Instance.new("TextButton", titleBar); closeBtn.Size=UDim2.new(0,20,0,20); closeBtn.Position=UDim2.new(1,-24,0.5,-10); closeBtn.BackgroundTransparency=1; closeBtn.Text="x"; closeBtn.TextColor3=Color3.fromRGB(200,150,255); closeBtn.Font=Enum.Font.GothamBold; closeBtn.TextSize = 12; closeBtn.ZIndex=9501
+    local svBox2 = Instance.new("Frame", popup); svBox2.Size=UDim2.new(1,-24,0,70); svBox2.Position=UDim2.new(0,12,0,30); svBox2.BackgroundColor3=Color3.fromHSV(1,1,1); svBox2.BorderSizePixel=0; Instance.new("UICorner",svBox2).CornerRadius=UDim.new(0,4)
+    local svW2=Instance.new("Frame",svBox2); svW2.Size=UDim2.new(1,0,1,0); svW2.BackgroundColor3=Color3.new(1,1,1); svW2.BorderSizePixel=0; Instance.new("UICorner",svW2)
+    local svWG2=Instance.new("UIGradient",svW2); svWG2.Transparency=NumberSequence.new{NumberSequenceKeypoint.new(0,0),NumberSequenceKeypoint.new(1,1)}
+    local svB2=Instance.new("Frame",svBox2); svB2.Size=UDim2.new(1,0,1,0); svB2.BackgroundColor3=Color3.new(0,0,0); svB2.BorderSizePixel=0; Instance.new("UICorner",svB2)
+    local svBG2=Instance.new("UIGradient",svB2); svBG2.Transparency=NumberSequence.new{NumberSequenceKeypoint.new(0,1),NumberSequenceKeypoint.new(1,0)}; svBG2.Rotation=90
+    local svBtn2=Instance.new("TextButton",svBox2); svBtn2.Size=UDim2.new(1,0,1,0); svBtn2.BackgroundTransparency=1; svBtn2.Text=""
+    local hueBar2 = Instance.new("Frame", popup); hueBar2.Size=UDim2.new(1,-24,0,8); hueBar2.Position=UDim2.new(0,12,0,106); hueBar2.BorderSizePixel=0; Instance.new("UICorner",hueBar2)
+    local hueUG2=Instance.new("UIGradient",hueBar2); hueUG2.Color=ColorSequence.new{ColorSequenceKeypoint.new(0,Color3.fromRGB(255,0,0)),ColorSequenceKeypoint.new(0.167,Color3.fromRGB(255,255,0)),ColorSequenceKeypoint.new(0.333,Color3.fromRGB(0,255,0)),ColorSequenceKeypoint.new(0.5,Color3.fromRGB(0,255,255)),ColorSequenceKeypoint.new(0.667,Color3.fromRGB(0,0,255)),ColorSequenceKeypoint.new(0.833,Color3.fromRGB(255,0,255)),ColorSequenceKeypoint.new(1,Color3.fromRGB(255,0,0))}
+    local hueCursor2=Instance.new("Frame",hueBar2); hueCursor2.Size=UDim2.new(0,4,1,4); hueCursor2.BackgroundColor3=Color3.new(1,1,1); hueCursor2.BorderSizePixel=1
+    local hueBtn2=Instance.new("TextButton",hueBar2); hueBtn2.Size=UDim2.new(1,0,1,0); hueBtn2.BackgroundTransparency=1; hueBtn2.Text=""
+    local svCursor2=Instance.new("Frame",svBox2); svCursor2.Size=UDim2.new(0,6,0,6); svCursor2.BackgroundColor3=Color3.new(1,1,1); svCursor2.BorderSizePixel=1; Instance.new("UICorner",svCursor2).CornerRadius=UDim.new(1,0)
+    local ih,is,iv = Color3.toHSV(initColor)
+    hueCursor2.Position=UDim2.new(ih,-2,0,-2); svCursor2.Position=UDim2.new(is,-3,1-iv,-3); svBox2.BackgroundColor3=Color3.fromHSV(ih,1,1)
+    local function updateInline()
+        local c=Color3.fromHSV(ih,math.max(is,0.01),math.max(iv,0.01))
+        config[configKey]=c; swatch.BackgroundColor3=c; svBox2.BackgroundColor3=Color3.fromHSV(ih,1,1)
+    end
+    uiRegistry[configKey]=function(color) ih,is,iv=Color3.toHSV(color); hueCursor2.Position=UDim2.new(ih,-2,0,-2); svCursor2.Position=UDim2.new(is,-3,1-iv,-3); updateInline() end
+    hueBtn2.InputBegan:Connect(function(i) if i.UserInputType~=Enum.UserInputType.MouseButton1 then return end; state.Main.Active=false; ih=math.clamp((i.Position.X-hueBar2.AbsolutePosition.X)/hueBar2.AbsoluteSize.X,0,1); hueCursor2.Position=UDim2.new(ih,-2,0,-2); updateInline(); local m=UIS.InputChanged:Connect(function(i2) if i2.UserInputType==Enum.UserInputType.MouseMovement then ih=math.clamp((i2.Position.X-hueBar2.AbsolutePosition.X)/hueBar2.AbsoluteSize.X,0,1); hueCursor2.Position=UDim2.new(ih,-2,0,-2); updateInline() end end); local eq; eq=UIS.InputEnded:Connect(function(i3) if i3.UserInputType==Enum.UserInputType.MouseButton1 then state.Main.Active=true; m:Disconnect(); eq:Disconnect() end end) end)
+    svBtn2.InputBegan:Connect(function(i) if i.UserInputType~=Enum.UserInputType.MouseButton1 then return end; state.Main.Active=false; is=math.clamp((i.Position.X-svBox2.AbsolutePosition.X)/svBox2.AbsoluteSize.X,0,1); iv=1-math.clamp((i.Position.Y-svBox2.AbsolutePosition.Y)/svBox2.AbsoluteSize.Y,0,1); svCursor2.Position=UDim2.new(is,-3,1-iv,-3); updateInline(); local m=UIS.InputChanged:Connect(function(i2) if i2.UserInputType==Enum.UserInputType.MouseMovement then is=math.clamp((i2.Position.X-svBox2.AbsolutePosition.X)/svBox2.AbsoluteSize.X,0,1); iv=1-math.clamp((i2.Position.Y-svBox2.AbsolutePosition.Y)/svBox2.AbsoluteSize.Y,0,1); svCursor2.Position=UDim2.new(is,-3,1-iv,-3); updateInline() end end); local eq; eq=UIS.InputEnded:Connect(function(i3) if i3.UserInputType==Enum.UserInputType.MouseButton1 then state.Main.Active=true; m:Disconnect(); eq:Disconnect() end end) end)
+    local popupOpen=false
+    local function openPopup()
+        popupOpen=true; popup.Visible=true
+        local pScale=popup:FindFirstChildOfClass("UIScale") or Instance.new("UIScale",popup)
+        pScale.Scale=0; tween(pScale,TweenInfo.new(0.18,Enum.EasingStyle.Back,Enum.EasingDirection.Out),{Scale=1})
+        local abs=swatch.AbsolutePosition; local vps=(workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1920,1080)
+        popup.Position=UDim2.new(0,math.clamp(abs.X-100,4,vps.X-224),0,math.clamp(abs.Y+20,4,vps.Y-134))
+    end
+    local function closePopup()
+        popupOpen=false; local pScale=popup:FindFirstChildOfClass("UIScale")
+        if pScale then tween(pScale,TweenInfo.new(0.12),{Scale=0}) end
+        task.delay(0.13,function() if not popupOpen then popup.Visible=false end end)
+    end
+    swatch.MouseButton1Click:Connect(function() if popupOpen then closePopup() else openPopup() end end)
+    closeBtn.MouseButton1Click:Connect(closePopup)
+    updateInline()
+end
+
+function dropdown(parent, text, options)
+    local frame = Instance.new("Frame", parent)
+    frame.Size = UDim2.new(1, -20, 0, 56)
+    frame.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+    frame.BackgroundTransparency = 0.5
+    frame.ZIndex = 10
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+    local l = Instance.new("TextLabel", frame); l.Text = text; l.Size = UDim2.new(1, -24, 0, 20); l.Position = UDim2.new(0, 12, 0, 4); l.BackgroundTransparency = 1; l.TextColor3 = Color3.fromRGB(240, 240, 245); l.TextXAlignment = Enum.TextXAlignment.Left; l.Font = Enum.Font.GothamBold; l.TextSize = 13
+    local ls = Instance.new("UIStroke", l); ls.Thickness = 1.2; ls.Transparency = 0.5; ls.Color = Color3.new(0,0,0)
+    local b = Instance.new("TextButton", frame); b.Size = UDim2.new(1, -24, 0, 24); b.Position = UDim2.new(0, 12, 0, 26); b.BackgroundColor3 = Color3.fromRGB(33, 33, 38); b.TextColor3 = Color3.fromRGB(210, 210, 220); b.Text = "  " .. (config[text] or options[1]); b.TextXAlignment = Enum.TextXAlignment.Center; b.Font = Enum.Font.GothamBold; b.TextSize = 12
+    local bs = Instance.new("UIStroke", b); bs.Thickness = 1; bs.Transparency = 0.6; bs.Color = Color3.new(0,0,0)
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
+    local function setVal(v) b.Text = "  " .. v; config[text] = v end
+    uiRegistry[text] = setVal
+    b.MouseButton1Click:Connect(function() local current = b.Text:gsub("  ", ""); local idx = table.find(options, current) or 1; local nextVal = options[idx + 1] or options[1]; setVal(nextVal) end)
+    
+    local clickableArea = Instance.new("TextButton", frame); clickableArea.Size = UDim2.new(1, 0, 1, 0); clickableArea.BackgroundTransparency = 1; clickableArea.Text = ""
+    clickableArea.MouseEnter:Connect(function() tween(frame, TweenInfo.new(0.2), {BackgroundTransparency = 0}) end)
+    clickableArea.MouseLeave:Connect(function() tween(frame, TweenInfo.new(0.2), {BackgroundTransparency = 0.5}) end)
+    clickableArea.MouseButton1Click:Connect(function() b.Text = "  " .. (options[(table.find(options, b.Text:gsub("  ", "")) or 1) % #options + 1]); config[text] = b.Text:gsub("  ", "") end)
+end
+
+function bindComponent(parent, text, configName)
+    local frame = Instance.new("Frame", parent)
+    frame.Size = UDim2.new(1, -20, 0, 36)
+    frame.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+    frame.BackgroundTransparency = 0.5
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+    local l = Instance.new("TextLabel", frame); l.Text = text; l.Size = UDim2.new(1, -110, 1, 0); l.Position = UDim2.new(0, 12, 0, 0); l.BackgroundTransparency = 1; l.TextColor3 = Color3.fromRGB(240, 240, 245); l.TextXAlignment = Enum.TextXAlignment.Left; l.Font = Enum.Font.GothamBold; l.TextSize = 13
+    local ls = Instance.new("UIStroke", l); ls.Thickness = 1.2; ls.Transparency = 0.5; ls.Color = Color3.new(0,0,0)
+    local b = Instance.new("TextButton", frame); b.Size = UDim2.new(0, 80, 0, 18); b.Position = UDim2.new(1, -90, 0.5, -9); b.TextScaled = false; b.BackgroundColor3 = Color3.fromRGB(33, 33, 38); b.TextColor3 = Color3.fromRGB(150, 150, 160); b.Text = config[configName].Name; b.Font = Enum.Font.GothamBold; b.TextSize = 11
+    local bs = Instance.new("UIStroke", b); bs.Thickness = 1; bs.Transparency = 0.6; bs.Color = Color3.new(0,0,0)
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
+    local function setKey(k) b.Text = k.Name; config[configName] = k end
+    uiRegistry[configName] = setKey
+    local waiting = false; b.MouseButton1Click:Connect(function() waiting = true b.Text = "..." tween(b, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(240, 80, 80)}) end)
+    table.insert(connections, UIS.InputBegan:Connect(function(input) if waiting and (input.UserInputType == Enum.UserInputType.Keyboard or input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2) then local key = (input.UserInputType == Enum.UserInputType.Keyboard) and input.KeyCode or input.UserInputType; setKey(key); tween(b, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(150, 150, 160)}); waiting = false end end))
+    
+    frame.MouseEnter:Connect(function() tween(frame, TweenInfo.new(0.2), {BackgroundTransparency = 0}) end)
+    frame.MouseLeave:Connect(function() tween(frame, TweenInfo.new(0.2), {BackgroundTransparency = 0.5}) end)
+end
+
+function button(parent, text, callback)
+    local b = Instance.new("TextButton", parent)
+    b.Size = UDim2.new(1, -20, 0, 36); b.BackgroundColor3 = Color3.fromRGB(33, 33, 38); b.TextColor3 = Color3.fromRGB(220, 220, 230); b.Text = text; b.Font = Enum.Font.GothamBold; b.TextSize = 13
+    local bs = Instance.new("UIStroke", b); bs.Thickness = 1.2; bs.Transparency = 0.5; bs.Color = Color3.new(0,0,0)
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    b.MouseEnter:Connect(function() tween(b, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(45, 45, 52)}) end)
+    b.MouseLeave:Connect(function() tween(b, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(33, 33, 38)}) end)
+    b.MouseButton1Click:Connect(callback)
+end
+
+
+--================ UI Helpers =================--
+local function createSubTabController(parentTab, options)
+    local navBar = Instance.new("Frame", parentTab)
+    navBar.Size = UDim2.new(1, 0, 0, 30); navBar.Position = UDim2.new(0, 0, 0, 5); navBar.BackgroundTransparency = 1
+    local layout = Instance.new("UIListLayout", navBar); layout.FillDirection = Enum.FillDirection.Horizontal; layout.Padding = UDim.new(0, 2)
+
+    local subPages = {}; local subBtns = {}
+    for i, name in ipairs(options) do
+        local btn = Instance.new("TextButton", navBar)
+        btn.Size = UDim2.new(1/math.max(#options, 1), -2, 1, 0); btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255); btn.Text = ""; btn.LayoutOrder = i
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+        
+        local btnLabel = Instance.new("TextLabel", btn)
+        btnLabel.Size = UDim2.new(1, 0, 1, 0); btnLabel.BackgroundTransparency = 1; btnLabel.Text = name; btnLabel.TextColor3 = (i == 1) and Color3.new(1, 1, 1) or Color3.fromRGB(180, 180, 200); btnLabel.Font = Enum.Font.GothamMedium; btnLabel.TextSize = 12; btnLabel.ZIndex = 11
+
+        local bGrad = Instance.new("UIGradient", btn)
+        bGrad.Rotation = 90; bGrad.Color = (i == 1) and ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromHex("7A5CFF")), ColorSequenceKeypoint.new(0.5, Color3.fromHex("C8A2FF")), ColorSequenceKeypoint.new(1, Color3.fromHex("7A5CFF"))} or ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(18, 31, 57)), ColorSequenceKeypoint.new(0.5, Color3.fromRGB(24, 40, 75)), ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 31, 57))}
+        
+        local bs = Instance.new("UIStroke", btn); bs.Thickness = 1.2; bs.Transparency = 0.5; bs.Color = (i == 1) and Color3.fromHex("C8A2FF") or Color3.fromRGB(18, 31, 57)
+        
+        local page = Instance.new("ScrollingFrame", parentTab)
+        page.Name = name .. "Page"
+        page.Size = UDim2.new(1, 0, 1, -40); page.Position = UDim2.new(0, 0, 0, 40)
+        page.BackgroundTransparency = 1; page.BorderSizePixel = 0
+        page.ScrollBarThickness = 3; page.ScrollBarImageColor3 = Color3.fromRGB(230, 70, 70)
+        page.CanvasSize = UDim2.new(0, 0, 0, 1000)
+        page.ScrollingEnabled = true; page.Visible = (i == 1)
+        subPages[name] = page; subBtns[name] = {btn = btn, label = btnLabel, grad = bGrad, stroke = bs}
+
+        btn.MouseButton1Click:Connect(function()
+            for n, p in pairs(subPages) do
+                p.Visible = (n == name)
+                local info = subBtns[n]
+                if info then
+                    tween(info.label, TweenInfo.new(0.3), {TextColor3 = (n == name) and Color3.new(1,1,1) or Color3.fromRGB(180, 180, 200)})
+                    tween(info.stroke, TweenInfo.new(0.3), {Color = (n == name) and Color3.fromHex("C8A2FF") or Color3.fromRGB(18, 31, 57)})
+                    info.grad.Color = (n == name) and ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromHex("7A5CFF")), ColorSequenceKeypoint.new(0.5, Color3.fromHex("C8A2FF")), ColorSequenceKeypoint.new(1, Color3.fromHex("7A5CFF"))} or ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(18, 31, 57)), ColorSequenceKeypoint.new(0.5, Color3.fromRGB(24, 40, 75)), ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 31, 57))}
+                end
+            end
+        end)
+    end
+    return subPages
+end
+
+function createRow(parent, height)
+    local f = Instance.new("Frame", parent)
+    f.Size = UDim2.new(1, -20, 0, height or 40)
+    f.BackgroundTransparency = 1
+    f.BorderSizePixel = 0
+    return f
+end
+
+local function sectionSubtitle(parent, text)
+    local frame = Instance.new("Frame", parent)
+    frame.Size = UDim2.new(1, -10, 0, 24)
+    frame.BackgroundTransparency = 1
+    local lbl = Instance.new("TextLabel", frame)
+    lbl.Size = UDim2.new(1, 0, 0, 18); lbl.Position = UDim2.new(0, 0, 0, 3); lbl.BackgroundColor3 = Color3.fromRGB(30, 40, 70); lbl.BackgroundTransparency = 0.3; lbl.TextColor3 = Color3.fromRGB(160, 80, 255); lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 11; lbl.Text = "  " .. text:upper(); lbl.TextXAlignment = Enum.TextXAlignment.Left; Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 4)
+    return frame
+end
+
+local function applySkybox(mode)
+    local l = game:GetService("Lighting")
+    local sky = l:FindFirstChild("KrazzSky") or Instance.new("Sky", l); sky.Name = "KrazzSky"
+    local ids = {
+        ["Default"] = {nil, 14},
+        ["Daylight"] = {nil, 14},
+        ["Night"] = {"rbxassetid://163208661", 0},
+        ["Bright sky"] = {"rbxassetid://129191239657016", 12},
+        ["Clear Sky"] = {"rbxassetid://1643195267", 12},
+        ["Purple skybox"] = {"rbxassetid://5858231918", 17.5},
+        ["Purple sunse"] = {"rbxassetid://5858231918", 17.5},
+        ["Sunrise"] = {"rbxassetid://305094272", 6.5},
+        ["Blood Sky"] = {"rbxassetid://260312648", 0}
+    }
+    local data = ids[mode]
+    if data then
+        if data[1] then sky.SkyboxBk = data[1]; sky.SkyboxDn = data[1]; sky.SkyboxFt = data[1]; sky.SkyboxLf = data[1]; sky.SkyboxRt = data[1]; sky.SkyboxUp = data[1] else pcall(function() sky:Destroy() end) end
+        l.ClockTime = data[2]
+
+        -- Premium Environmental Tinting
+    if mode == "Purple sunset" or mode == "Purple skybox" then
+            l.ClockTime = 18.5 -- Sunset bias
+            l.Ambient = Color3.fromRGB(120, 40, 255)
+            l.OutdoorAmbient = Color3.fromRGB(150, 60, 255)
+            l.FogColor = Color3.fromRGB(140, 50, 255)
+            l.FogEnd = 3000; l.FogStart = 0
+
+            local sky = l:FindFirstChild("KrazzSky") or Instance.new("Sky", l)
+            sky.Name = "KrazzSky"
+--             for better tinting
+    local atm = l:FindFirstChild("KrazzAtmosphere") or Instance.new("Atmosphere", l)
+            atm.Color = Color3.fromRGB(200, 100, 255); atm.Decay = Color3.fromRGB(150, 0, 255)
+            sky.SkyboxUp = "rbxassetid://4622080517"; sky.SkyboxDn = "rbxassetid://4622080517"
+            sky.SkyboxLf = "rbxassetid://4622080517"; sky.SkyboxRt = "rbxassetid://4622080517"
+            sky.SkyboxFt = "rbxassetid://4622080517"; sky.SkyboxBk = "rbxassetid://4622080517"
+
+            local cc = l:FindFirstChild("KrazzCC") or Instance.new("ColorCorrectionEffect", l)
+            cc.Name = "KrazzCC"; cc.Enabled = true; cc.TintColor = Color3.fromRGB(255, 180, 255); cc.Saturation = 0.8; cc.Contrast = 0.25
+            
+            local atm = l:FindFirstChild("KrazzAtmosphere") or Instance.new("Atmosphere", l)
+            atm.Name = "KrazzAtmosphere"; atm.Color = Color3.fromRGB(200, 100, 255); atm.Decay = Color3.fromRGB(150, 0, 255); atm.Density = 0.45; atm.Glare = 0.85
+        elseif mode == "Blood Sky" then
+            -- Blood Sky: red ambient ONLY, NO fog (fog is separate feature)
+            l.Ambient = Color3.fromRGB(60, 0, 0); l.OutdoorAmbient = Color3.fromRGB(60, 0, 0)
+            l.FogColor = Color3.fromRGB(80, 0, 0); l.FogEnd = 100000; l.FogStart = 0 -- No fog
+    local atm = l:FindFirstChild("KrazzAtmosphere") or Instance.new("Atmosphere", l)
+            atm.Name = "KrazzAtmosphere"
+            atm.Color = Color3.fromRGB(220, 0, 0); atm.Decay = Color3.fromRGB(150, 0, 0); atm.Density = 0.2; atm.Glare = 0.4; atm.Offset = 0.1
+            local clds = workspace.Terrain:FindFirstChildOfClass("Clouds") or Instance.new("Clouds", workspace.Terrain)
+            clds.Color = Color3.fromRGB(255, 0, 0); clds.Cover = 0.8; clds.Density = 0.85
+        elseif mode == "Purple sunse" or mode == "Purple sunset" or mode == "Purple skybox" then
+            l.Ambient = Color3.fromRGB(100, 60, 140); l.OutdoorAmbient = Color3.fromRGB(80, 40, 120)
+            l.FogColor = Color3.fromRGB(160, 80, 255); l.FogEnd = 100000; l.FogStart = 0 -- No fog
+    local atm = l:FindFirstChild("KrazzAtmosphere") or Instance.new("Atmosphere", l)
+            atm.Name = "KrazzAtmosphere"
+            atm.Color = Color3.fromRGB(160, 80, 255); atm.Decay = Color3.fromRGB(100, 40, 200); atm.Density = 0.2; atm.Glare = 0.4; atm.Offset = 0.3
+            local clds = workspace.Terrain:FindFirstChildOfClass("Clouds") or Instance.new("Clouds", workspace.Terrain)
+            clds.Color = Color3.fromRGB(180, 100, 255); clds.Cover = 0.6; clds.Density = 0.5
+        else
+            local atm = l:FindFirstChild("KrazzAtmosphere"); if atm then atm:Destroy() end
+            local clds = workspace.Terrain:FindFirstChildOfClass("Clouds"); if clds then clds:Destroy() end
+            l.FogEnd = 100000; l.FogStart = 0
+        end
+    end
+end
+
+--[[ KRAZZ SKYBOX: applySkybox ]]
+-- ============================================================
+local _krazzSkyToggleGroup = {}
+function applySkybox(mode)
+    local L = game:GetService("Lighting")
+
+    --[[
+        SAFE CLEAR: Daylight, Bright sky, Sky, Atmosphere
+    ]]
+    local safeModesNoSkyTouch = { Daylight = true, ["Bright sky"] = true }
+    if not safeModesNoSkyTouch[mode] then
+        -- Sky
+    for _, v in ipairs(L:GetChildren()) do
+            if v:IsA("Sky") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+    end
+    -- Atmosphere
+    for _, v in ipairs(L:GetChildren()) do
+        if v:IsA("Atmosphere") and v.Name == "KrazzAtmosphere" then
+            pcall(function() v:Destroy() end)
+        end
+    end
+    local clds = workspace.Terrain:FindFirstChildOfClass("Clouds")
+    if clds then pcall(function() clds:Destroy() end) end
+
+    -- ============================================================
+    --[[ DEFAULT ]]
+    if mode == "Default" then
+        L.ClockTime = 14; L.Brightness = 2
+        L.Ambient = Color3.fromRGB(0,0,0)
+        L.OutdoorAmbient = Color3.fromRGB(127,127,127)
+        L.FogEnd = 100000; L.FogStart = 0
+        L.ExposureCompensation = 0
+        L.GlobalShadows = true
+
+    -- ============================================================
+    --[[ DAYLIGHT: Sky                     E                         ]]
+    elseif mode == "Daylight" then
+        -- ! DO NOT TOUCH SKY !
+        L.ClockTime = 12
+        L.Brightness = 2
+        L.ExposureCompensation = 0.2
+        L.Ambient = Color3.fromRGB(100, 120, 150)
+        L.OutdoorAmbient = Color3.fromRGB(130, 155, 185)
+        L.GlobalShadows = true
+        -- Atmosphere
+    local atm = Instance.new("Atmosphere", L); atm.Name = "KrazzAtmosphere"
+        atm.Density = 0.25; atm.Color = Color3.fromRGB(190, 215, 245)
+        atm.Decay = Color3.fromRGB(150, 185, 225); atm.Haze = 0.4; atm.Glare = 0.3
+
+    -- ============================================================
+    --[[ BRIGHT SKY: Sky                     E                         ]]
+    elseif mode == "Bright sky" then
+        -- ! DO NOT TOUCH SKY !
+        L.ClockTime = 14
+        L.Brightness = 3
+        L.ExposureCompensation = 0.5
+        L.Ambient = Color3.fromRGB(130, 160, 200)
+        L.OutdoorAmbient = Color3.fromRGB(165, 195, 235)
+        L.GlobalShadows = true
+        local atm = Instance.new("Atmosphere", L); atm.Name = "KrazzAtmosphere"
+        atm.Density = 0.15; atm.Color = Color3.fromRGB(210, 230, 255)
+        atm.Haze = 0.7; atm.Glare = 0.8
+
+    -- ============================================================
+    --[[ CLEAR SKY ]]
+    elseif mode == "Clear Sky" then
+        L.ClockTime = 13; L.Brightness = 2.5; L.ExposureCompensation = 0.1
+        L.Ambient = Color3.fromRGB(80,120,180); L.OutdoorAmbient = Color3.fromRGB(100,150,210)
+        L.GlobalShadows = true
+        local atm = Instance.new("Atmosphere", L); atm.Name = "KrazzAtmosphere"
+        atm.Density = 0.08; atm.Color = Color3.fromRGB(160,200,255)
+        atm.Haze = 0.2; atm.Glare = 0.1
+
+    -- ============================================================
+    --[[ PURPLE SUNSE /       E                              E                               ]]
+    elseif mode == "Purple sunse" then
+        --                E                E+                                           
+        L.Technology = Enum.Technology.Future
+        L.ClockTime = 1
+        L.Brightness = 1.0
+        L.GlobalShadows = true
+        L.ExposureCompensation = 0.15
+        L.Ambient = Color3.fromRGB(55, 10, 90)   --    E      
+        L.OutdoorAmbient = Color3.fromRGB(40, 5, 75)
+        -- Galaxy
+    local atm = Instance.new("Atmosphere", L); atm.Name = "KrazzAtmosphere"
+        atm.Density = 0.55      --       E        atm.Offset  = 0.05
+        atm.Color   = Color3.fromRGB(85, 15, 140)   --    
+        atm.Decay   = Color3.fromRGB(55, 5, 105)    --          E      
+        atm.Haze    = 0.5
+        atm.Glare   = 0.06   --             E      
+        -- Bloom
+    local blm = Instance.new("BloomEffect", L); blm.Name = "KrazzGalaxyBloom"
+        blm.Intensity = 1.6; blm.Size = 28; blm.Threshold = 0.6
+        -- ColorCorrection
+    local cc = Instance.new("ColorCorrectionEffect", L); cc.Name = "KrazzGalaxyCC"
+        cc.Brightness = 0.04; cc.Contrast = 0.3; cc.Saturation = 0.35
+        cc.TintColor = Color3.fromRGB(185, 90, 255)
+        -- StarCount         Sky
+    local sky = Instance.new("Sky", L); sky.Name = "KrazzPurpleGalaxySky"
+        sky.StarCount = 14000  --          E4000   
+        sky.SunAngularSize = 0; sky.MoonAngularSize = 4
+        sky.SkyboxBk = "rbxassetid://6444320592"
+        sky.SkyboxDn = "rbxassetid://6444320592"
+        sky.SkyboxFt = "rbxassetid://6444320592"
+        sky.SkyboxLf = "rbxassetid://6444320592"
+        sky.SkyboxRt = "rbxassetid://6444320592"
+        sky.SkyboxUp = "rbxassetid://6444320592"
+
+    -- ============================================================
+    --[[ SUNRISE ]]
+    elseif mode == "Sunrise" then
+        L.ClockTime = 6.5; L.Brightness = 1.5; L.ExposureCompensation = 0.3
+        L.Ambient = Color3.fromRGB(80, 30, 60); L.OutdoorAmbient = Color3.fromRGB(120, 60, 80)
+        L.GlobalShadows = true
+        local atm = Instance.new("Atmosphere", L); atm.Name = "KrazzAtmosphere"
+        atm.Density = 0.45; atm.Color = Color3.fromRGB(220, 100, 80)
+        atm.Decay = Color3.fromRGB(160, 60, 40); atm.Haze = 0.8; atm.Glare = 0.6
+
+    -- ============================================================
+    --[[ PURPLE SKYBOX ]]
+    elseif mode == "Purple skybox" then
+        L.ClockTime = 20; L.Brightness = 1.2; L.ExposureCompensation = 0.2
+        L.Ambient = Color3.fromRGB(60, 10, 80); L.OutdoorAmbient = Color3.fromRGB(40, 5, 60)
+        L.GlobalShadows = true
+        local atm = Instance.new("Atmosphere", L); atm.Name = "KrazzAtmosphere"
+        atm.Density = 0.5; atm.Color = Color3.fromRGB(100, 30, 180)
+        atm.Decay = Color3.fromRGB(60, 10, 120); atm.Haze = 0.6; atm.Glare = 0.3
+
+    -- ============================================================
+    --[[ BLOOD SKY:       ]]
+    elseif mode == "Blood Sky" then
+        L.Technology = Enum.Technology.Future
+        L.ClockTime = 18.5  --                      E        L.Brightness = 0.8
+        L.ExposureCompensation = 0.25
+        L.GlobalShadows = true
+        L.Ambient = Color3.fromRGB(110, 0, 0)
+        L.OutdoorAmbient = Color3.fromRGB(140, 0, 0)
+        -- Fog            
+        L.FogEnd = 600; L.FogStart = 50
+        L.FogColor = Color3.fromRGB(180, 20, 20)
+        -- Atmosphere:
+    local atm = Instance.new("Atmosphere", L); atm.Name = "KrazzAtmosphere"
+        atm.Density = 0.65
+        atm.Offset  = 0.0
+        atm.Color   = Color3.fromRGB(220, 25, 25)
+        atm.Decay   = Color3.fromRGB(160, 8, 8)
+        atm.Haze    = 0.95
+        atm.Glare   = 0.4
+        -- Blood               Sky
+    local sky = Instance.new("Sky", L); sky.Name = "KrazzBloodSky"
+        sky.StarCount = 500   --                         E        sky.SunAngularSize = 0; sky.MoonAngularSize = 12  --             E        sky.SkyboxBk = "rbxassetid://6401188805"
+        sky.SkyboxDn = "rbxassetid://6401188805"
+        sky.SkyboxFt = "rbxassetid://6401188805"
+        sky.SkyboxLf = "rbxassetid://6401188805"
+        sky.SkyboxRt = "rbxassetid://6401188805"
+        sky.SkyboxUp = "rbxassetid://6401188805"
+        -- Bloom
+    local blm = Instance.new("BloomEffect", L); blm.Name = "KrazzBloodBloom"
+        blm.Intensity = 0.8; blm.Size = 18; blm.Threshold = 0.5
+        -- ColorCorrection   E         E               E
+    local cc = Instance.new("ColorCorrectionEffect", L); cc.Name = "KrazzBloodCC"
+        cc.Brightness = -0.05; cc.Contrast = 0.4; cc.Saturation = 0.2
+        cc.TintColor = Color3.fromRGB(255, 80, 80)
+
+    elseif mode == "Night Sky" then
+        if getgenv().applySkyboxNight then getgenv().applySkyboxNight() end
+    elseif mode == "Heavenly" then
+        if getgenv().applySkyboxHeavenly then getgenv().applySkyboxHeavenly() end
+    elseif mode == "Purple Galaxy Ocean" then
+        if getgenv().applySkyboxPurpleGalaxy then getgenv().applySkyboxPurpleGalaxy() end
+    end
+end
+
+function createKebab(parentSec, rowParent)
+    --[[ KEBAB TRIGGER BUTTON:    3                     E   E]]
+    local kBtn = Instance.new("TextButton", rowParent)
+    --[[ kBtn: 3                              EothamBold                "..."                  E   E]]
+    kBtn.Size = UDim2.new(0, 34, 1, 4)   --                      E      
+    kBtn.Position = UDim2.new(1, -36, 0, -2)
+    kBtn.BackgroundColor3 = Color3.fromRGB(20, 14, 30)
+    kBtn.BackgroundTransparency = 0.4
+    kBtn.Text = ""
+    kBtn.ZIndex = 11
+    Instance.new("UICorner", kBtn).CornerRadius = UDim.new(0, 6)
+    --          E                     EFrame
+    local dotFrame = Instance.new("Frame", kBtn)
+    dotFrame.Size = UDim2.new(0, 5, 0, 18); dotFrame.Position = UDim2.new(0.5, -2.5, 0.5, -9)
+    dotFrame.BackgroundTransparency = 1
+    local layout = Instance.new("UIListLayout", dotFrame)
+    layout.FillDirection = Enum.FillDirection.Horizontal
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.VerticalAlignment = Enum.VerticalAlignment.Center
+    layout.Padding = UDim.new(0, 3)
+    for i = 1, 3 do
+        local d = Instance.new("Frame", dotFrame)
+        d.Size = UDim2.new(0, 4, 0, 4)
+        d.BackgroundColor3 = Color3.fromRGB(160, 80, 255)
+        Instance.new("UICorner", d).CornerRadius = UDim.new(1, 0)
+    end
+
+    -- ============================================================
+    --[[ MENU: Skybox                        E   EreateKebab                  E      E]]
+    -- TitleBar            E                                    Emenu                     E    -- ============================================================
+    local menu = Instance.new("Frame", state.gui)
+    menu.Name = "KrazzSkyboxPanel"
+    menu.Size = UDim2.new(0, 210, 0, 0)
+    menu.AutomaticSize = Enum.AutomaticSize.Y
+    menu.BackgroundColor3 = Color3.fromRGB(8, 10, 16)
+    menu.BackgroundTransparency = 0.0; menu.Visible = false --       E         E   E                  E                     E    
+    menu.ZIndex = 10000
+    menu.Active = true   Instance.new("UICorner", menu).CornerRadius = UDim.new(0, 12)
+    local ms = Instance.new("UIStroke", menu)
+    ms.Color = Color3.fromRGB(140, 60, 220)
+    ms.Thickness = 1.5; ms.Transparency = 0.1
+    ms.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+    --[[ TITLE BAR:          E                                             E ]]
+    local titleBar = Instance.new("Frame", menu)
+    titleBar.Name = "TitleBar"
+    titleBar.Size = UDim2.new(1, 0, 0, 44)  --        =          E                  
+    titleBar.BackgroundColor3 = Color3.fromRGB(16, 12, 26)
+    titleBar.BorderSizePixel = 0
+    titleBar.ZIndex = 10005
+    titleBar.Active = true
+    local tbCorner = Instance.new("UICorner", titleBar)
+    tbCorner.CornerRadius = UDim.new(0, 12)
+    local tbCover = Instance.new("Frame", titleBar)
+    tbCover.Size = UDim2.new(1, 0, 0, 14)  --       E12px            E         
+    tbCover.Position = UDim2.new(0, 0, 1, -14)
+    tbCover.BackgroundColor3 = Color3.fromRGB(16, 12, 26)
+    tbCover.BorderSizePixel = 0; tbCover.ZIndex = 10004
+
+    local titleLbl = Instance.new("TextLabel", titleBar)
+    titleLbl.Size = UDim2.new(1, -50, 1, 0)
+    titleLbl.Position = UDim2.new(0, 12, 0, 0)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text = "Sky Selection"
+    titleLbl.TextColor3 = Color3.fromRGB(200, 160, 255)
+    titleLbl.TextSize = 13; titleLbl.Font = Enum.Font.GothamBold
+    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    titleLbl.ZIndex = 10010
+
+    --[[             E      :           X             E         E"X" = Gotham         E]]
+    local cClose = Instance.new("TextButton", titleBar)
+    cClose.Name = "CloseBtn"
+    cClose.Size = UDim2.new(0, 30, 0, 30)
+    cClose.Position = UDim2.new(1, -36, 0.5, -15)
+    cClose.BackgroundColor3 = Color3.fromRGB(50, 15, 60)
+    cClose.BackgroundTransparency = 0.1
+    cClose.Font = Enum.Font.GothamBold
+    cClose.Text = "X"   -- Gotham                                 E    cClose.TextColor3 = Color3.fromRGB(220, 100, 255)
+    cClose.TextSize = 14
+    cClose.ZIndex = 10020
+    Instance.new("UICorner", cClose).CornerRadius = UDim.new(1, 0)
+    cClose.MouseEnter:Connect(function()
+        TweenService:Create(cClose, TweenInfo.new(0.12), {
+            BackgroundColor3 = Color3.fromRGB(180, 20, 40),
+            TextColor3 = Color3.fromRGB(255, 255, 255)
+        }):Play()
+    end)
+    cClose.MouseLeave:Connect(function()
+        TweenService:Create(cClose, TweenInfo.new(0.12), {
+            BackgroundColor3 = Color3.fromRGB(50, 15, 60),
+            TextColor3 = Color3.fromRGB(220, 100, 255)
+        }):Play()
+    end)
+    cClose.MouseButton1Click:Connect(function() menu.Visible = false end)
+
+    --[[ CONTENT: titleBar                              E                      ]]
+    local content = Instance.new("Frame", menu)
+    content.Name = "Content"
+    content.Size = UDim2.new(1, 0, 0, 0)
+    content.AutomaticSize = Enum.AutomaticSize.Y
+    content.Position = UDim2.new(0, 0, 0, 44)  -- titleBar                     
+    content.BackgroundTransparency = 1
+    content.ZIndex = 10002
+    local list = Instance.new("UIListLayout", content)
+    list.Padding = UDim.new(0, 3)
+    list.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    local pad = Instance.new("UIPadding", content)
+    pad.PaddingTop = UDim.new(0, 6); pad.PaddingBottom = UDim.new(0, 10)
+    pad.PaddingLeft = UDim.new(0, 8); pad.PaddingRight = UDim.new(0, 8)
+
+    --[[ DRAG: titleBar            E                                              ]]
+    do
+--         local dragging, dragStart, startPos
+        titleBar.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                -- CloseBtn                  E               E
+    if input.Position.X > cClose.AbsolutePosition.X then return end
+                dragging = true
+                dragStart = Vector2.new(input.Position.X, input.Position.Y)
+                startPos = menu.Position
+            end
+        end)
+        UIS.InputChanged:Connect(function(input)
+            if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+                local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStart
+                menu.Position = UDim2.new(
+                    startPos.X.Scale, startPos.X.Offset + delta.X,
+                    startPos.Y.Scale, startPos.Y.Offset + delta.Y
+                )
+            end
+        end)
+        UIS.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = false
+            end
+        end)
+    end
+
+    local function addOpt(name, callback)
+        local b = Instance.new("TextButton", content)
+        b.Size = UDim2.new(1, 0, 0, 30)
+        b.BackgroundColor3 = Color3.fromRGB(20, 24, 34)
+        b.Text = ""; b.ZIndex = 10005
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 7)
+        local lbl = Instance.new("TextLabel", b)
+        lbl.Size = UDim2.new(1, -40, 1, 0); lbl.Position = UDim2.new(0, 10, 0, 0)
+        lbl.BackgroundTransparency = 1; lbl.Text = name
+        lbl.TextColor3 = Color3.fromRGB(220, 220, 245)
+        lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 11
+        lbl.TextXAlignment = Enum.TextXAlignment.Left; lbl.ZIndex = 10006
+        local dot = Instance.new("Frame", b)
+        dot.Name = "StatusDot"
+        dot.Size = UDim2.new(0, 8, 0, 8); dot.Position = UDim2.new(1, -16, 0.5, -4)
+        dot.BackgroundColor3 = Color3.fromRGB(60, 110, 230)
+        Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+        dot.ZIndex = 10007
+        b.MouseButton1Click:Connect(function()
+            callback()
+            for _, v in ipairs(content:GetChildren()) do
+                if v:IsA("TextButton") then
+                    local d = v:FindFirstChild("StatusDot")
+                    if d then d.BackgroundColor3 = Color3.fromRGB(60, 110, 230) end
+                end
+            end
+            dot.BackgroundColor3 = Color3.fromRGB(230, 60, 60)
+        end)
+    end
+
+    kBtn.MouseButton1Click:Connect(function()
+        menu.Visible = not menu.Visible
+        if menu.Visible then
+            local abs = kBtn.AbsolutePosition
+            local vp = camera.ViewportSize
+            local menuW = 210
+            local px = math.clamp(abs.X - menuW + 36, 4, vp.X - menuW - 4)
+            local py = math.min(abs.Y + kBtn.AbsoluteSize.Y + 4, vp.Y - 300)
+            menu.Position = UDim2.new(0, px, 0, py)
+        end
+    end)
+    return addOpt, menu
+end
+
+--================ Page Implementation =================--
+
+local function getSubTab(registry, tabName, subName)
+    local start = os.clock()
+    while not registry[subName] and os.clock() - start < 3.0 do task.wait() end
+    return registry[subName] or Instance.new("ScrollingFrame")
+end
+
+-- AIMBOT
+local ok_aimbot, err_aimbot = pcall(function() do -- Scope: AIMBOT & SILENT AIM
+local aimSec = createSection(tabs["AIMBOT"], "Main Settings", 15, 300, 460, nil, "rbxassetid://13800031135")
+toggle(aimSec, "Enable Aimbot")
+toggle(aimSec, "Aimbot Team Check")
+dropdown(aimSec, "Aimbot Mode", {"Hold", "Toggle"})
+bindComponent(aimSec, "Aimbot Key", "Aimbot Key")
+toggle(aimSec, "Show FOV")
+toggle(aimSec, "Filled FOV")
+slider(aimSec, "Filled FOV Transparency", 0, 1, true)
+slider(aimSec, "Aimbot FOV", 10, 600)
+colorPicker(aimSec, "Aimbot FOV Color", Color3.fromRGB(230, 70, 70))
+slider(aimSec, "Aimbot Max Distance", 10, 2000)
+slider(aimSec, "Smoothing", 1, 20)
+local advAimSec = createSection(tabs["AIMBOT"], "Advanced Settings", 325, 300, 220)
+toggle(advAimSec, "Visibility Check")
+dropdown(advAimSec, "Target Part", {"Head", "UpperTorso", "HumanoidRootPart"})
+dropdown(advAimSec, "Aimbot Method", {"Camera Lock", "Mouse Aim", "Matcha", "Mobile Lock"})
+toggle(advAimSec, "Aimbot Sticky Aim")
+
+local predSec = createSection(tabs["AIMBOT"], "Prediction Settings", 325, 300, 225, 265)
+toggle(predSec, "Prediction")
+slider(predSec, "Aim Prediction X", 0.1, 20, true)
+slider(predSec, "Aim Prediction Y", 0.1, 20, true)
+
+-- SILENT AIM
+local sAimSec = createSection(tabs["SILENT AIM"], "Main Silent Aim", 15, 300, 460)
+toggle(sAimSec, "Enable Silent Aim")
+dropdown(sAimSec, "Silent Aim Mode", {"Always", "Toggle", "Hold"})
+bindComponent(sAimSec, "Silent Aim Key", "SilentAimKey")
+toggle(sAimSec, "Show Silent FOV")
+toggle(sAimSec, "Silent Filled FOV")
+slider(sAimSec, "Silent Filled FOV Transparency", 0, 1, true)
+slider(sAimSec, "Silent Aim FOV", 10, 600)
+colorPicker(sAimSec, "Silent Aim FOV Color", Color3.fromRGB(70, 70, 230))
+dropdown(sAimSec, "Silent Aim Target Part", {"Head", "UpperTorso", "HumanoidRootPart"})
+
+local advSilentSec = createSection(tabs["SILENT AIM"], "Advanced Settings", 325, 300, 460)
+toggle(advSilentSec, "Silent Aim 360 FOV")
+toggle(advSilentSec, "Silent Visibility Check")
+slider(advSilentSec, "Silent Max Distance", 10, 2000)
+slider(advSilentSec, "Silent Aim Hitchance", 0, 100)
+toggle(advSilentSec, "Silent Team Check")
+toggle(advSilentSec, "Silent Sticky Aim")
+
+    -- [End Aimbot Scope]
+end end)
+if not ok_aimbot then warn("AIMBOT BUILD ERR: " .. tostring(err_aimbot)) end
+local ok_esp, err_esp = pcall(function() do -- Scope: ESP
+    -- Elements consolidated into VISUALS scope below
+end end)
+local ok_visuals, err_visuals = pcall(function() do -- Scope: VISUALS
+--     ified System ]]
+    local visTarget = tabs["VISUALS"]
+    visSubTabs = createSubTabController(visTarget, {"Visuals", "Advance", "World", "Player"})
+    
+    local espMasterSec = createSection(visSubTabs["Visuals"], "ESP Master", 15, 300, 425)
+    toggle(espMasterSec, "Enable ESP")
+    toggle(espMasterSec, "Team Check")
+    toggle(espMasterSec, "  Self ESP")
+    slider(espMasterSec, "ESP Max Distance", 10, 2000)
+
+
+    -- Elements Merged into Master with inline color pickers
+    local boxTF = toggle(espMasterSec, "Enable box")
+    if boxTF then inlineColorPicker(boxTF, "Enemy Box Color", Color3.fromRGB(230, 70, 70)) end
+    dropdown(espMasterSec, "Box Type", {"Full", "Corner", "2D"})
+    toggle(espMasterSec, "Filled box")
+    toggle(espMasterSec, "Outlines")
+    local skelTF = toggle(espMasterSec, "Skeleton")
+    if skelTF then inlineColorPicker(skelTF, "Enemy Skeleton Color", Color3.fromRGB(230, 70, 70)) end
+    local hatTF = toggle(espMasterSec, "China Hat")
+    if hatTF then inlineColorPicker(hatTF, "China Hat Color", Color3.fromRGB(255, 255, 255)) end
+    local dotTF = toggle(espMasterSec, "Head Dot")
+    if dotTF then inlineColorPicker(dotTF, "Head Dot Color", Color3.fromRGB(230, 70, 70)) end
+    local weaponTF = toggle(espMasterSec, "Weapon ESP")
+    if weaponTF then inlineColorPicker(weaponTF, "Weapon ESP Color", Color3.fromRGB(255, 255, 255)) end
+
+    -- Indicators with inline color pickers
+    local hbTF = toggle(espMasterSec, "Healthbar")
+    if hbTF then inlineColorPicker(hbTF, "Enemy Health Bar Color", Color3.fromRGB(0, 255, 0)) end
+    local nicknameToggleFrame = nil
+    local nickTF = toggle(espMasterSec, "Player Nickname")
+    if nickTF then inlineColorPicker(nickTF, "Enemy Name Color", Color3.fromRGB(230, 70, 70)) end
+    for _, c in ipairs(espMasterSec:GetChildren()) do
+        if c:IsA("Frame") and c:FindFirstChild("TextLabel") and c.TextLabel.Text == "Player Nickname" then nicknameToggleFrame = c end
+    end
+    local distTF = toggle(espMasterSec, "Distance Tag")
+    if distTF then inlineColorPicker(distTF, "Enemy Distance Color", Color3.fromRGB(200, 200, 200)) end
+    dropdown(espMasterSec, "Distance Type", {"Studs", "Meters"})
+    -- Team color overrides inline
+    local teamChkTF = nil; for _, c in ipairs(espMasterSec:GetChildren()) do if c:IsA("Frame") and c:FindFirstChild("TextLabel") and c.TextLabel.Text == "Team Check" then teamChkTF = c end end
+    if teamChkTF then inlineColorPicker(teamChkTF, "Team Box Color", Color3.fromRGB(70, 230, 70)) end
+
+    if nicknameToggleFrame then
+        local kebab = Instance.new("TextButton", nicknameToggleFrame); kebab.Size = UDim2.new(0, 20, 0, 20); kebab.Position = UDim2.new(1, -20, 0, 2); kebab.BackgroundTransparency = 1; kebab.Text = ""
+        local dotC = Instance.new("Frame", kebab); dotC.Size = UDim2.new(0, 11, 0, 3); dotC.Position = UDim2.new(0.5, -5.5, 0.5, -1.5); dotC.BackgroundTransparency = 1; local dl = Instance.new("UIListLayout", dotC); dl.FillDirection = Enum.FillDirection.Horizontal; dl.Padding = UDim.new(0, 1)
+        for i=1,3 do local d = Instance.new("Frame", dotC); d.Size = UDim2.new(0, 3, 0, 3); d.BackgroundColor3 = Color3.fromRGB(200, 180, 255); Instance.new("UICorner", d).CornerRadius = UDim.new(1, 0) end
+        kebab.ZIndex = 25
+
+        local nickOverlay = Instance.new("Frame", gui); nickOverlay.Size = UDim2.new(0, 270, 0, 70); nickOverlay.BackgroundColor3 = Color3.fromRGB(6, 10, 19); nickOverlay.BorderSizePixel = 0; nickOverlay.ZIndex = 5000; nickOverlay.Visible = false; Instance.new("UICorner", nickOverlay).CornerRadius = UDim.new(0, 8); local nos = Instance.new("UIStroke", nickOverlay); nos.Thickness = 1.5; nos.Color = Color3.fromRGB(160, 80, 255); nos.Transparency = 0.5
+        local noTitle = Instance.new("TextLabel", nickOverlay); noTitle.Size = UDim2.new(1, 0, 0, 30); noTitle.BackgroundColor3 = Color3.fromRGB(15, 25, 45); noTitle.Text = "  Nickname Settings"; noTitle.TextColor3 = Color3.fromRGB(230, 60, 60); noTitle.Font = Enum.Font.GothamBold; noTitle.TextSize = 13; noTitle.TextXAlignment = Enum.TextXAlignment.Left; Instance.new("UICorner", noTitle).CornerRadius = UDim.new(0, 8)
+        makeDraggable(nickOverlay)
+        local noContainer = Instance.new("Frame", nickOverlay); noContainer.Size = UDim2.new(1, -10, 1, -40); noContainer.Position = UDim2.new(0, 5, 0, 35); noContainer.BackgroundTransparency = 1
+        local noLayout = Instance.new("UIListLayout", noContainer); noLayout.Padding = UDim.new(0, 6); noLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        toggle(noContainer, "Display Name")
+        local nickScale = Instance.new("UIScale", nickOverlay)
+        local nClose = Instance.new("TextButton", nickOverlay); nClose.Size = UDim2.new(0, 24, 0, 24); nClose.Position = UDim2.new(1, -28, 0, 3); nClose.BackgroundTransparency = 1; nClose.Text = "X"; nClose.TextColor3 = Color3.fromRGB(200, 180, 255); nClose.Font = Enum.Font.GothamBold; nClose.TextSize = 14; nClose.ZIndex = 5002
+
+        local nickExpanded = false
+        local function setNSExpanded(val)
+            nickExpanded = val
+            if nickExpanded then
+                nickOverlay.Visible = true; nickScale.Scale = 0; tween(nickScale, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1})
+                local vSize = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1920, 1080)
+                local abs = kebab.AbsolutePosition; local sz = kebab.AbsoluteSize; nickOverlay.Position = UDim2.new(0, math.max(4, abs.X + sz.X - 270), 0, math.min(abs.Y + sz.Y + 4, vSize.Y - 70 - 4))
+            else
+                tween(nickScale, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = 0}); task.delay(0.15, function() if not nickExpanded then nickOverlay.Visible = false end end)
+            end
+        end
+        kebab.MouseButton1Click:Connect(function() setNSExpanded(not nickExpanded) end)
+        nClose.MouseButton1Click:Connect(function() setNSExpanded(false) end)
+        table.insert(connections, UIS.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 and nickExpanded then
+                local mPos = UIS:GetMouseLocation(); local abs = nickOverlay.AbsolutePosition; local sz = nickOverlay.AbsoluteSize
+                if not (mPos.X >= abs.X and mPos.X <= abs.X + sz.X and mPos.Y >= abs.Y and mPos.Y <= abs.Y + sz.Y) then setNSExpanded(false) end
+            end
+        end))
+    end
+
+    -- Global Visuals (Merged into Master)
+    local charmToggleFrame = toggle(espMasterSec, "Enable Charm")
+
+    if charmToggleFrame then
+        local kebab = Instance.new("TextButton", charmToggleFrame); kebab.Size = UDim2.new(0, 30, 0, 30); kebab.Position = UDim2.new(0, 94, 0.5, -15); kebab.BackgroundTransparency = 1; kebab.Text = ""
+        local dotC = Instance.new("Frame", kebab); dotC.Size = UDim2.new(0, 11, 0, 3); dotC.Position = UDim2.new(0.5, -5.5, 0.5, -1.5); dotC.BackgroundTransparency = 1; local dl = Instance.new("UIListLayout", dotC); dl.FillDirection = Enum.FillDirection.Horizontal; dl.Padding = UDim.new(0, 1)
+        for i=1,3 do local d = Instance.new("Frame", dotC); d.Size = UDim2.new(0, 3, 0, 3); d.BackgroundColor3 = Color3.fromRGB(200, 180, 255); Instance.new("UICorner", d).CornerRadius = UDim.new(1, 0) end
+        kebab.ZIndex = 25
+
+        local charmOverlay = Instance.new("Frame", gui); charmOverlay.Size = UDim2.new(0, 270, 0, 160); charmOverlay.BackgroundColor3 = Color3.fromRGB(6, 10, 19); charmOverlay.Visible = false; charmOverlay.ZIndex = 5000; Instance.new("UICorner", charmOverlay).CornerRadius = UDim.new(0, 8); local cos = Instance.new("UIStroke", charmOverlay); cos.Thickness = 1.5; cos.Color = Color3.fromRGB(160, 80, 255); cos.Transparency = 0.5
+        local coTitle = Instance.new("TextLabel", charmOverlay); coTitle.Size = UDim2.new(1, 0, 0, 30); coTitle.BackgroundColor3 = Color3.fromRGB(15, 25, 45); coTitle.Text = "  Charm Material Settings"; coTitle.TextColor3 = Color3.fromRGB(230, 60, 60); coTitle.Font = Enum.Font.GothamBold; coTitle.TextSize = 13; coTitle.TextXAlignment = Enum.TextXAlignment.Left; makeDraggable(charmOverlay)
+        local coContainer = Instance.new("ScrollingFrame", charmOverlay); coContainer.Size = UDim2.new(1,-10,1,-40); coContainer.Position = UDim2.new(0,5,0,35); coContainer.BackgroundTransparency=1; coContainer.ScrollBarThickness=2; coContainer.CanvasSize=UDim2.new(0,0,0,0)
+        local coLayout = Instance.new("UIListLayout", coContainer); coLayout.Padding=UDim.new(0,6); coLayout.HorizontalAlignment=Enum.HorizontalAlignment.Center
+
+        dropdown(coContainer, "Charm Material", {"Disable", "Pure Highlight", "Solid", "Glow", "Glow Outline", "Iridescent", "ForceField", "Plastic", "Neon", "SmoothPlastic", "Glass"})
+        colorPicker(coContainer, "Enemy Charm Color", Color3.fromRGB(230, 70, 70))
+        colorPicker(coContainer, "Team Charm Color", Color3.fromRGB(70, 230, 70))
+        toggle(coContainer, "Charm Tracers")
+        dropdown(coContainer, "Charm Tracer Attachment", {"Bottom", "Torso", "Head"})
+        colorPicker(coContainer, "Tracer Color", Color3.fromRGB(160, 32, 240))
+
+        local charmScale = Instance.new("UIScale", charmOverlay)
+        local cClose = Instance.new("TextButton", charmOverlay); cClose.Size=UDim2.new(0,24,0,24); cClose.Position=UDim2.new(1,-28,0,3); cClose.BackgroundTransparency=1; cClose.Text="X"; cClose.TextColor3=Color3.fromRGB(200,180,255); cClose.Font=Enum.Font.GothamBold; cClose.TextSize = 14
+
+        local expanded = false
+        local function setExpanded(val)
+            expanded = val
+            if expanded then charmOverlay.Visible=true; charmScale.Scale=0; tween(charmScale, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale=1})
+                local vSize = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1920, 1080)
+                local abs = kebab.AbsolutePosition; local sz = kebab.AbsoluteSize; charmOverlay.Position = UDim2.new(0, math.max(4, abs.X + sz.X - 270), 0, math.min(abs.Y + sz.Y + 4, vSize.Y - 160 - 4))
+            else
+                tween(charmScale, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale=0}); task.delay(0.15, function() if not expanded then charmOverlay.Visible=false end end)
+            end
+        end
+        kebab.MouseButton1Click:Connect(function() setExpanded(not expanded) end)
+        cClose.MouseButton1Click:Connect(function() setExpanded(false) end)
+    end
+
+    local espConfigSec = createSection(visSubTabs["Visuals"], "ESP Config", 325, 300, 220)
+    toggle(espConfigSec, "Death ESP")
+    colorPicker(espConfigSec, "Death ESP Color", Color3.fromRGB(230, 70, 70))
+    toggle(espConfigSec, "Soul Particles")
+    toggle(espConfigSec, "Hit Notifications")
+    colorPicker(espConfigSec, "Hit Number Color", Color3.fromRGB(255, 105, 180))
+
+    -- [Interactive ESP Preview Logic]
+    local function applyPreviewESP(model)
+        if not model then return end
+        local box = model:FindFirstChild("PreviewBox") or Instance.new("SelectionBox", model)
+        box.Name = "PreviewBox"; box.Adornee = model; box.Color3 = config["Box Color"] or Color3.fromRGB(0, 255, 0); box.LineThickness = 0.05
+        box.Visible = config["Box ESP"] or false
+
+        local skel = model:FindFirstChild("PreviewSkel") or Instance.new("Highlight", model)
+        skel.Name = "PreviewSkel"; skel.FillTransparency = 1; skel.OutlineColor = config["Skeleton Color"] or Color3.new(1,1,1)
+        skel.Enabled = config["Skeleton"] or false; skel.OutlineTransparency = 0
+    end
+
+
+    -- ESP Preview (ViewportFrame - R6 Character)
+    local espPreviewSec = createSection(visSubTabs["Visuals"], "ESP Preview", 325, 300, 195, 265)
+    do
+        -- previewWrap goes INTO espPreviewSec (pArea), not its parent
+    local previewWrap = Instance.new("Frame", espPreviewSec)
+        previewWrap.Size = UDim2.new(1, -16, 0, 140)
+        previewWrap.Position = UDim2.new(0, 8, 0, 4)
+        previewWrap.BackgroundTransparency = 1
+        previewWrap.BorderSizePixel = 0
+
+        -- ViewportFrame: fully isolated 3D, rain/Drawing API cannot bleed through
+    local vpf = Instance.new("ViewportFrame", previewWrap)
+        vpf.Size = UDim2.new(1, 0, 1, 0)
+        vpf.BackgroundTransparency = 1; vpf.ZIndex = 510
+        vpf.Ambient = Color3.new(1, 1, 1)
+        vpf.LightColor = Color3.new(1, 1, 1)
+        vpf.LightDirection = Vector3.new(-1, -2, -1)
+
+        local vpCam = Instance.new("Camera", vpf)
+        vpCam.FieldOfView = 45
+-- for full view
+        vpCam.CFrame = CFrame.new(Vector3.new(1.2, 1.2, 8.5), Vector3.new(0, 1.0, 0))
+        vpf.CurrentCamera = vpCam
+
+        -- R6 character: Roblox-accurate proportions and classic dummy coloring
+    local skinC  = Color3.fromRGB(235, 235, 235)  -- Light Gray (Head/Arms)
+    local shirtC = Color3.fromRGB(200, 30, 30)    -- Bright Red (Torso)
+    local pantsC = Color3.fromRGB(160, 160, 160)  -- Gray (Legs)
+    local partDefs = {
+            {"Head",      Vector3.new(1.0, 1.0, 1.0),  Vector3.new( 0,    2.5,   0),  skinC,  true},
+            {"Torso",     Vector3.new(2.0, 2.0, 1.0),  Vector3.new( 0,    1.0,   0),  shirtC, false},
+            {"Left Arm",  Vector3.new(1.0, 2.0, 1.0),  Vector3.new(-1.5,  1.0,   0),  skinC,  false},
+            {"Right Arm", Vector3.new(1.0, 2.0, 1.0),  Vector3.new( 1.5,  1.0,   0),  skinC,  false},
+            {"Left Leg",  Vector3.new(1.0, 2.0, 1.0),  Vector3.new(-0.5, -1.0,   0),  pantsC, false},
+            {"Right Leg", Vector3.new(1.0, 2.0, 1.0),  Vector3.new( 0.5, -1.0,   0),  pantsC, false},
+        }
+        local partRefs = {}; local baseCF = {}
+        for _, d in ipairs(partDefs) do
+            local p = Instance.new("Part", vpf)
+            p.Name = d[1]; p.Size = d[2]
+            p.CFrame = CFrame.new(d[3])
+            p.Color = d[4]; p.Material = Enum.Material.SmoothPlastic
+            p.Anchored = true; p.CanCollide = false; p.CastShadow = false
+            -- Round the Head with a sphere mesh and add face decal
+    if d[5] then
+                local sm = Instance.new("SpecialMesh", p)
+                sm.MeshType = Enum.MeshType.Head  -- classic Roblox head shape
+    local decal = Instance.new("Decal", p)
+                decal.Texture = "rbxasset://textures/face.png"
+                decal.Face = Enum.NormalId.Front
+            end
+            partRefs[d[1]] = p; baseCF[d[1]] = d[3]
+        end
+
+        -- Group for ESP Effects
+    local charModel = Instance.new("Model", vpf)
+        for _, p in pairs(partRefs) do p.Parent = charModel end
+        charModel.PrimaryPart = partRefs["Torso"]
+
+        -- [Preview Update Loop]
+        task.spawn(function()
+            while task.wait(0.3) do
+                if not (espPreviewSec and espPreviewSec.Parent and espPreviewSec.Parent.Visible) then task.wait(1) continue end
+                applyPreviewESP(charModel)
+            end
+        end)
+
+
+        -- 3D background plane with asset 11211435667 as Decal (Moved slightly right)
+    local bgPlane = Instance.new("Part", vpf)
+        bgPlane.Size = Vector3.new(22, 18, 0.1)
+        bgPlane.CFrame = CFrame.new(0.45, 0.7, -8.5) * CFrame.Angles(0, math.pi, 0)
+        bgPlane.Anchored = true; bgPlane.CanCollide = false; bgPlane.CastShadow = false
+        bgPlane.Color = Color3.fromRGB(8,12,22); bgPlane.Material = Enum.Material.SmoothPlastic
+        local bgDecal = Instance.new("Decal", bgPlane)
+        bgDecal.Texture = "rbxassetid://11211435667"; bgDecal.Face = Enum.NormalId.Front
+        bgDecal.Transparency = 0 -- Maximum Recognition Visibility (Solid)
+
+
+        bgPlane.Transparency = 1
+
+        -- 2D ESP overlay elements parented to previewWrap to overlay properly over ViewportFrame
+    local function makeLabel(txt, sz, col)
+            local l = Instance.new("TextLabel", previewWrap)
+            l.BackgroundTransparency = 1; l.Font = Enum.Font.GothamBold
+            l.TextSize = sz; l.TextColor3 = col; l.Text = txt
+            l.ZIndex = 525; l.Visible = false
+            l.AnchorPoint = Vector2.new(0.5, 1)
+            l.Size = UDim2.new(0, 90, 0, sz + 3)
+            Instance.new("UIStroke", l).Thickness = 1
+            return l
+        end
+        local nameL = makeLabel("KrazzUser", 11, Color3.fromRGB(255, 255, 255))
+        local distL = makeLabel("[ 38m ]",   10, Color3.fromRGB(200, 200, 200))
+
+        local boxFr = Instance.new("Frame", previewWrap)
+        boxFr.BackgroundTransparency = 1; boxFr.ZIndex = 522; boxFr.Visible = false
+        local bStk = Instance.new("UIStroke", boxFr); bStk.Thickness = 1.5; bStk.Color = Color3.fromRGB(230,70,70)
+
+        local hbBg = Instance.new("Frame", previewWrap)
+        hbBg.BackgroundColor3 = Color3.new(0,0,0); hbBg.BackgroundTransparency = 0.4
+        hbBg.BorderSizePixel = 0; hbBg.ZIndex = 523; hbBg.Visible = false
+        local hbFill = Instance.new("Frame", hbBg)
+        hbFill.Size = UDim2.new(1,0,0.75,0); hbFill.Position = UDim2.new(0,0,0.125,0)
+        hbFill.BackgroundColor3 = Color3.fromRGB(0, 220, 0); hbFill.BorderSizePixel = 0
+
+        -- Rotation + live ESP overlay update
+        task.spawn(function()
+            local ang = 0
+            while task.wait(0.016) do
+                if _G.Unloaded then break end
+                if not previewWrap or not previewWrap.Parent then break end
+                pcall(function()
+                    if not (state.Main and state.Main.Visible) then return end
+                    ang = (ang + 0.9) % 360
+                    local rot = CFrame.Angles(0, math.rad(ang), 0)
+                    for nm, p in pairs(partRefs) do
+                        p.CFrame = rot * CFrame.new(baseCF[nm])
+                    end
+
+                    local bc = config["Enemy Box Color"] or Color3.fromRGB(230, 70, 70)
+                    local nc = config["Enemy Name Color"] or Color3.fromRGB(255, 255, 255)
+
+                    local headMid = (rot * CFrame.new(baseCF["Head"])).Position
+                    local hdSP, hdOn = vpCam:WorldToViewportPoint(headMid + Vector3.new(0, 0.6, 0))
+                    local ftSP, ftOn = vpCam:WorldToViewportPoint((rot * CFrame.new(0, -2.1, 0)).Position)
+                    local lSP  = vpCam:WorldToViewportPoint((rot * CFrame.new(-2.0, 1.0, 0)).Position)
+                    local rSP  = vpCam:WorldToViewportPoint((rot * CFrame.new( 2.0, 1.0, 0)).Position)
+
+                    if hdOn and ftOn then
+                        local vsz = vpCam.ViewportSize
+                        if vsz.X > 0 and vsz.Y > 0 then
+                            local lScaleX = lSP.X / vsz.X
+                            local rScaleX = rSP.X / vsz.X
+                            local hdScaleX = hdSP.X / vsz.X
+                            local hdScaleY = hdSP.Y / vsz.Y
+                            local ftScaleY = ftSP.Y / vsz.Y
+
+                            local bx  = math.min(lScaleX, rScaleX)
+                            local bw  = math.max(math.abs(rScaleX - lScaleX), 0.02)
+                            local by  = math.min(hdScaleY, ftScaleY)
+                            local bh  = math.max(math.abs(ftScaleY - hdScaleY), 0.05)
+
+                            if config["Enable box"] then
+                                boxFr.Visible = true
+                                boxFr.Position = UDim2.new(bx, 0, by, 0)
+                                boxFr.Size = UDim2.new(bw, 0, bh, 0)
+                                bStk.Color = bc
+                            else boxFr.Visible = false end
+
+                            if config["Health Bar"] then
+                                hbBg.Visible = true
+                                hbBg.Position = UDim2.new(bx, -6, by, 0)
+                                hbBg.Size = UDim2.new(0, 3, bh, 0)
+                            else hbBg.Visible = false end
+
+                            if config["Player Nickname"] then
+                                nameL.Visible = true; nameL.TextColor3 = nc
+                                nameL.Position = UDim2.new(hdScaleX, 0, hdScaleY, -2)
+                            else nameL.Visible = false end
+
+                            if config["Distance Tag"] then
+                                distL.Visible = true
+                                distL.Position = UDim2.new(ftSP.X / vsz.X, 0, ftScaleY, 2)
+                            else distL.Visible = false end
+                        end
+                    else
+                        boxFr.Visible = false; hbBg.Visible = false
+                        nameL.Visible = false; distL.Visible = false
+                    end
+                end)
+            end
+        end)
+    end
+
+
+
+    -- [ OLD VISUALS CATEGORY (Display: Advance) ]
+    local radarSec = createSection(visSubTabs["Advance"], "Radar Settings", 15, 300, 220, 35)
+    toggle(radarSec, "Enable Radar")
+    slider(radarSec, "Radar Size", 100, 400)
+    slider(radarSec, "Radar Range", 50, 2000)
+    colorPicker(radarSec, "Radar Enemy Color", Color3.fromRGB(230, 70, 70))
+    colorPicker(radarSec, "Radar Team Color", Color3.fromRGB(70, 230, 70))
+
+-- Section initialization handled above
+config["_0xAim Method"] = "CustomV3" -- Set CustomV3 by default (Original Restoration)
+
+-- (buildESPPreview definition removed; logic inlined above to avoid nil-call crash)
+
+-- REDUNDANT PREVIEW REMOVED PER REQUEST
+
+local crossSec = createSection(visSubTabs["Advance"], "Crosshair", 325, 300, 225, 35)
+toggle(crossSec, "Crosshair")
+local crossKebab = createKebab(visSubTabs["Advance"], crossSec.Parent:FindFirstChild("TextLabel").Parent)
+toggle(crossSec, "Rotate Crosshair")
+slider(crossSec, "Crosshair Rotation Speed", 1, 10)
+slider(crossSec, "Crosshair Size", 2, 20)
+slider(crossSec, "Crosshair Gap", 0, 15)
+slider(crossSec, "Crosshair Thickness", 1, 5)
+colorPicker(crossSec, "Crosshair Color", Color3.fromRGB(230, 60, 60))
+toggle(crossSec, "Crosshair Outline")
+colorPicker(crossSec, "Crosshair Outline Color", Color3.fromRGB(0, 0, 0))
+
+-- Crosshair Drawing Implementation (Drawing API)
+local crossLines = {}
+local crossLinesOutline = {}
+for i = 1, 4 do
+    local lo = Drawing.new("Line")
+    lo.Thickness = 4
+    lo.Color = Color3.new(0,0,0)
+    lo.Transparency = 1
+    lo.Visible = false
+    crossLinesOutline[i] = lo
+
+    local l = Drawing.new("Line")
+    l.Thickness = 2
+    l.Color = Color3.fromRGB(230, 60, 60)
+    l.Transparency = 1
+    l.Visible = false
+    crossLines[i] = l
+end
+
+
+local crossAngle = 0
+table.insert(connections, RunService.RenderStepped:Connect(function()
+    if _G.Unloaded then
+        for _, l in ipairs(crossLines) do pcall(function() l:Remove() end) end
+        return
+    end
+    local enabled = config["Crosshair"] == true
+    local rotate = config["Rotate Crosshair"] == true
+    local cam = workspace.CurrentCamera
+    local center = (cam and cam.ViewportSize / 2) or Vector2.new(960, 540)
+
+    if enabled then
+        if rotate then
+            crossAngle = (crossAngle + (config["Crosshair Rotation Speed"] or 2)) % 360
+        end
+        local size = config["Crosshair Size"] or 10
+        local gap = config["Crosshair Gap"] or 5
+        local clr = config["Crosshair Color"] or Color3.fromRGB(230, 60, 60)
+        local thick = config["Crosshair Thickness"] or 2
+        local outlineEnabled = config["Crosshair Outline"] == true
+        local outlineClr = config["Crosshair Outline Color"] or Color3.new(0,0,0)
+
+        for i = 1, 4 do
+            local angle = math.rad(crossAngle + (i-1) * 90)
+            local startOffset = Vector2.new(math.cos(angle), math.sin(angle)) * gap
+            local endOffset = Vector2.new(math.cos(angle), math.sin(angle)) * (gap + size)
+            
+            -- Outline First
+    local lo = crossLinesOutline[i]
+            lo.Visible = outlineEnabled
+            if outlineEnabled then
+                lo.Color = outlineClr
+                lo.Thickness = thick + 1.5
+                lo.From = center + startOffset
+                lo.To = center + endOffset
+            end
+
+            -- Main Line
+    local l = crossLines[i]
+            l.Visible = true
+            l.Color = clr
+            l.Thickness = thick
+            l.From = center + startOffset
+            l.To = center + endOffset
+        end
+    else
+        for _, l in ipairs(crossLines) do l.Visible = false end
+        for _, lo in ipairs(crossLinesOutline) do lo.Visible = false end
+    end
+end))
+
+
+-- Radar moved up to ESP Config section
+
+-- (Legacy 2D preview overlay removed - 3D viewport handles all preview rendering above)
+
+local worldSec = createSection(visSubTabs["World"], "Environment", 15, 300, 220)
+
+local skyRow = createRow(worldSec, 36)
+local skyLabel = Instance.new("TextLabel", skyRow); skyLabel.Size = UDim2.new(1, -60, 1, 0); skyLabel.Position = UDim2.new(0, 12, 0, 0); skyLabel.BackgroundTransparency = 1; skyLabel.Text = "Sky box selection"; skyLabel.TextColor3 = Color3.fromRGB(240, 240, 245); skyLabel.TextXAlignment = Enum.TextXAlignment.Left; skyLabel.Font = Enum.Font.GothamBold; skyLabel.TextSize = 13; Instance.new("UIStroke", skyLabel).Color = Color3.new(0,0,0); skyLabel:FindFirstChildOfClass("UIStroke").Thickness = 1.2
+
+local addSkyOpt, skyKebabMenu = createKebab(worldSec, skyRow)
+
+do
+    local skyToggleGroup = {}
+    local activeSkyMode = config["Time of Day"] or "Default" -- track which sky is on
+    local function kebabToggle(parent, label, cb)
+        local target = parent:FindFirstChild("Content") or parent
+        local row = Instance.new("Frame", target)
+        row.Size = UDim2.new(1, -16, 0, 28)
+        row.BackgroundColor3 = Color3.fromRGB(24, 28, 38)
+        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 5)
+        row.ZIndex = 62
+        local lbl = Instance.new("TextLabel", row)
+        lbl.Size = UDim2.new(1, -50, 1, 0); lbl.Position = UDim2.new(0, 8, 0, 0)
+        lbl.BackgroundTransparency = 1; lbl.Text = label
+        lbl.TextColor3 = Color3.fromRGB(220, 220, 240); lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 10
+        lbl.TextXAlignment = Enum.TextXAlignment.Left; lbl.ZIndex = 62
+        local btn = Instance.new("TextButton", row)
+        btn.Size = UDim2.new(0, 30, 0, 16); btn.Position = UDim2.new(1, -38, 0.5, -8)
+        btn.BackgroundColor3 = Color3.fromRGB(60, 110, 230)
+        btn.Text = ""; btn.ZIndex = 63; Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
+        local dot = Instance.new("Frame", btn)
+        dot.Size = UDim2.new(0, 12, 0, 12); dot.AnchorPoint = Vector2.new(0.5, 0.5)
+        dot.Position = UDim2.new(0, 8, 0.5, 0)
+        dot.BackgroundColor3 = Color3.fromRGB(255,255,255); dot.ZIndex = 64
+        Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+        local clickArea = Instance.new("TextButton", row)
+        clickArea.Size = UDim2.new(1,0,1,0); clickArea.BackgroundTransparency = 1; clickArea.Text = ""; clickArea.ZIndex = 65
+
+        local toggleElement = {btn=btn, dot=dot, active=false, label=label}
+        table.insert(skyToggleGroup, toggleElement)
+
+        clickArea.MouseButton1Click:Connect(function()
+            if toggleElement.active then
+                -- ALREADY ON    Etoggle OFF: restore Default sky
+                toggleElement.active = false
+                activeSkyMode = "Default"
+                TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(60,110,230)}):Play()
+                TweenService:Create(dot, TweenInfo.new(0.15), {Position = UDim2.new(0,8,0.5,0)}):Play()
+                pcall(function()
+                    local l = game:GetService("Lighting")
+                    -- Restore all Krazz sky/atmosphere instances
+    for _, v in ipairs(l:GetChildren()) do
+                        if v:IsA("Sky") or (v:IsA("Atmosphere") and v.Name == "KrazzAtmosphere") then
+                            pcall(function() v:Destroy() end)
+                        end
+                    end
+                    local clds = workspace.Terrain:FindFirstChildOfClass("Clouds")
+                    if clds then pcall(function() clds:Destroy() end) end
+                    l.ClockTime = 14
+                    l.Ambient = Color3.fromRGB(0, 0, 0)
+                    l.OutdoorAmbient = Color3.fromRGB(127, 127, 127)
+                    l.FogEnd = 100000; l.FogStart = 0
+                end)
+            else
+                -- Turn all OFF first
+    for _, t in ipairs(skyToggleGroup) do
+                    t.active = false
+                    TweenService:Create(t.btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(60,110,230)}):Play()
+                    TweenService:Create(t.dot, TweenInfo.new(0.15), {Position = UDim2.new(0,8,0.5,0)}):Play()
+                end
+                -- Turn this one ON
+                toggleElement.active = true
+                activeSkyMode = label
+                TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(230,60,60)}):Play()
+                TweenService:Create(dot, TweenInfo.new(0.15), {Position = UDim2.new(1,-8,0.5,0)}):Play()
+                cb()
+            end
+        end)
+    end
+    for _, m in ipairs({"Default", "Daylight", "Bright sky", "Clear Sky", "Purple sunse", "Purple skybox", "Sunrise", "Blood Sky"}) do
+        kebabToggle(skyKebabMenu, m, function() applySkybox(m) end)
+    end
+end
+
+dropdown(worldSec, "Mode Selection", {"Global", "Local", "Override"})
+dropdown(worldSec, "Time of Day", {"Day", "Night", "Evening"})
+toggle(worldSec, "Third Person")
+slider(worldSec, "Third Person Distance", 5, 50)
+toggle(worldSec, "Enable Fog")
+colorPicker(worldSec, "Fog Color", Color3.fromRGB(255,255,255))
+slider(worldSec, "Fog Density", 0, 100)
+toggle(worldSec, "Enable Rain")
+slider(worldSec, "Rain Intensity", 1, 100)
+colorPicker(worldSec, "Rain Color", Color3.fromRGB(160, 200, 255))
+--[[ BULLET TRACER UI: Rain                   ]]
+toggle(worldSec, "Enable Tracer")
+colorPicker(worldSec, "Tracer Color Start", Color3.fromRGB(255, 220, 80))
+colorPicker(worldSec, "Tracer Color End",   Color3.fromRGB(255, 80, 80))
+slider(worldSec, "Tracer Fade Time", 1, 100)  -- 1=0.01s, 100=1.0s
+
+local lSec = createSection(visSubTabs["World"], "Lighting", 15, 300, 225, 270)
+slider(lSec, "Lighting Brightness", 0, 100)
+toggle(lSec, "Enable Shadows")
+slider(lSec, "Shadow Softness", 0, 100)
+slider(lSec, "Exposure Compensation", 0, 100)
+slider(lSec, "Environment Reflections", 0, 100)
+toggle(lSec, "Enable Color Shift")
+colorPicker(lSec, "Top Ambient/Sky Color", Color3.fromRGB(255, 255, 255))
+colorPicker(lSec, "Bottom Ambient/Ground Color", Color3.fromRGB(255, 255, 255))
+colorPicker(lSec, "Direct Ambient Color", Color3.fromRGB(255, 255, 255))
+colorPicker(lSec, "Direct Outdoor Ambient Color", Color3.fromRGB(255, 255, 255))
+
+local ppcSec = createSection(visSubTabs["World"], "Post-Processing Effects", 325, 300, 220)
+toggle(ppcSec, "Enable Bloom")
+slider(ppcSec, "Bloom Intensity", 0, 100)
+slider(ppcSec, "Bloom Size", 0, 100)
+slider(ppcSec, "Bloom Threshold", 0, 100)
+toggle(ppcSec, "Enable Depth Of Field (DOF)")
+toggle(ppcSec, "Enable Sun Rays")
+slider(ppcSec, "Sun Rays Intensity", 0, 100)
+slider(ppcSec, "Sun Rays Spread", 0, 100)
+toggle(ppcSec, "Enable Motion Blur")
+slider(ppcSec, "Motion Blur Intensity", 0, 100)
+
+local ccrSec = createSection(visSubTabs["World"], "Color Correction", 325, 300, 225, 270)
+toggle(ccrSec, "Enable Color Correction")
+dropdown(ccrSec, "Color Correction Preset", {"Default", "Vibrant", "Dark"})
+slider(ccrSec, "CC Brightness", 0, 100)
+slider(ccrSec, "CC Contrast", 0, 100)
+slider(ccrSec, "CC Saturation", 0, 100)
+colorPicker(ccrSec, "CC Tint Color", Color3.fromRGB(255, 255, 255))
+
+-- Overrides subtab removed. Colors now handled via inlineColorPicker in ESP Master section.
+-- for any color keys not yet set by inlineColorPicker
+pcall(function()
+    config["Enemy Soul Color"] = config["Enemy Soul Color"] or Color3.fromRGB(230, 70, 70)
+    config["Enemy Weapon Text Color"] = config["Enemy Weapon Text Color"] or Color3.fromRGB(255, 255, 255)
+    config["Team Name Color"] = config["Team Name Color"] or Color3.fromRGB(70, 230, 70)
+    config["Team Health Bar Color"] = config["Team Health Bar Color"] or Color3.fromRGB(0, 255, 0)
+    config["Team Weapon Text Color"] = config["Team Weapon Text Color"] or Color3.fromRGB(255, 255, 255)
+    config["Team Distance Color"] = config["Team Distance Color"] or Color3.fromRGB(200, 200, 200)
+    config["Team Skeleton Color"] = config["Team Skeleton Color"] or Color3.fromRGB(70, 230, 70)
+    config["Team Soul Color"] = config["Team Soul Color"] or Color3.fromRGB(70, 230, 70)
+end)
+
+-- Player Additions (Self Charm merged here)
+local pVisSec = createSection(visSubTabs["Player"], "Player Additions", 15, 300, 220)
+toggle(pVisSec, "Enable Self Chams")
+dropdown(pVisSec, "Self Charm Material", {"Disable", "Pure Highlight", "ForceField", "Neon", "Plastic", "SmoothPlastic", "Glass", "Glow"})
+colorPicker(pVisSec, "Self Charm Color", Color3.fromRGB(160, 80, 255))
+dropdown(pVisSec, "Self Charm Animation", {"Swirl", "None"})
+slider(pVisSec, "Self Charm Reflectance", 0, 100)
+
+local armChamsSec = createSection(visSubTabs["Player"], "Arm Chams", 325, 300, 460)
+toggle(armChamsSec, "Enable Arm Chams")
+colorPicker(armChamsSec, "Arm Chams Color", Color3.fromRGB(230, 230, 230))
+slider(armChamsSec, "Arm Chams Reflectance", 0, 100)
+dropdown(armChamsSec, "Arm Chams Material", {"ForceField", "Neon", "Plastic"})
+dropdown(armChamsSec, "Arm Chams Animation", {"Swirl", "None"})
+
+local viewOffSec = createSection(visSubTabs["Player"], "Viewmodel Offset", 15, 300, 225, 235)
+toggle(viewOffSec, "Enable Viewmodel Offset")
+slider(viewOffSec, "Viewmodel Offset Z", -20, 20)
+end end)
+if not ok_visuals then warn("[KRAZZ] Visuals scope error: " .. tostring(err_visuals)) end
+
+local ok_misc, err_misc = pcall(function() do -- Scope: ANTIAIM, MOVEMENT & SETTINGS
+-- ANTIAIM
+local aaSec = createSection(tabs["ANTIAIM"], "Anti-Aim Settings", 15, 300, 460)
+toggle(aaSec, "Enable AntiAim")
+dropdown(aaSec, "Pitch", {"None", "Down", "Up", "Random", "Custom"}) 
+dropdown(aaSec, "Yaw Angle", {"off", "Backward"})
+dropdown(aaSec, "Yaw", {"None", "Spin", "Jitter"})
+dropdown(aaSec, "Jitter Mode", {"Random", "90"})
+
+do
+    local yawDropFrame = nil
+    for _, c in ipairs(aaSec:GetChildren()) do
+        if c:IsA("Frame") and c:FindFirstChild("TextLabel") and c.TextLabel.Text == "Yaw" then yawDropFrame = c end
+    end
+    if yawDropFrame then
+        local kebab = Instance.new("TextButton", yawDropFrame)
+        kebab.Size = UDim2.new(0, 20, 0, 20); kebab.Position = UDim2.new(1, -20, 0, 2); kebab.BackgroundTransparency = 1; kebab.Text = ""
+        local dotC = Instance.new("Frame", kebab); dotC.Size = UDim2.new(0, 11, 0, 3); dotC.Position = UDim2.new(0.5, -5.5, 0.5, -1.5); dotC.BackgroundTransparency = 1
+        local dl = Instance.new("UIListLayout", dotC); dl.FillDirection = Enum.FillDirection.Horizontal; dl.Padding = UDim.new(0, 1)
+        for i=1,3 do
+            local d = Instance.new("Frame", dotC); d.Size = UDim2.new(0, 3, 0, 3); d.BackgroundColor3 = Color3.fromRGB(200, 180, 255); Instance.new("UICorner", d).CornerRadius = UDim.new(1, 0)
+        end
+        kebab.ZIndex = 25
+
+        local OVERLAY_W, OVERLAY_H = 270, 160
+        local yawOverlay = Instance.new("Frame", gui); yawOverlay.Size = UDim2.new(0, OVERLAY_W, 0, OVERLAY_H); yawOverlay.BackgroundColor3 = Color3.fromRGB(6, 10, 19); yawOverlay.Visible = false; yawOverlay.ZIndex = 1100
+        Instance.new("UICorner", yawOverlay).CornerRadius = UDim.new(0, 8)
+        local oStroke = Instance.new("UIStroke", yawOverlay); oStroke.Color = Color3.fromRGB(160, 80, 255); oStroke.Thickness = 1.5; oStroke.Transparency = 0.5
+        local yawScale = Instance.new("UIScale", yawOverlay)
+        
+        local yClose = Instance.new("TextButton", yawOverlay); yClose.Size = UDim2.new(0, 24, 0, 24); yClose.Position = UDim2.new(1, -28, 0, 1); yClose.BackgroundTransparency = 1; yClose.Text = "X"; yClose.TextColor3 = Color3.fromRGB(200, 180, 255); yClose.Font = Enum.Font.GothamBold; yClose.TextSize = 14; yClose.ZIndex = 1102
+        local oTitle = Instance.new("TextLabel", yawOverlay); oTitle.Size = UDim2.new(1, 0, 0, 26); oTitle.BackgroundColor3 = Color3.fromRGB(15, 25, 45); oTitle.Text = "  Yaw Settings"; oTitle.TextColor3 = Color3.fromRGB(230, 60, 60); oTitle.Font = Enum.Font.GothamBold; oTitle.TextSize = 13; oTitle.TextXAlignment = Enum.TextXAlignment.Left; oTitle.ZIndex = 1101; Instance.new("UICorner", oTitle).CornerRadius = UDim.new(0, 8)
+        makeDraggable(yawOverlay)
+
+        local oContent = Instance.new("Frame", yawOverlay); oContent.Size = UDim2.new(1, 0, 1, -28); oContent.Position = UDim2.new(0, 0, 0, 28); oContent.BackgroundTransparency = 1; oContent.ZIndex = 1101
+        local oLayout = Instance.new("UIListLayout", oContent); oLayout.Padding = UDim.new(0, 12); oLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        Instance.new("UIPadding", oContent).PaddingTop = UDim.new(0, 12)
+        slider(oContent, "Yaw Base Offset", -180, 180)
+        slider(oContent, "Jitter Range", 10, 360)
+
+        local yawExpanded = false
+        local function setYawExpanded(val)
+            yawExpanded = val
+            if yawExpanded then
+                yawOverlay.Visible = true; yawScale.Scale = 0
+                tween(yawScale, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1})
+                local abs = kebab.AbsolutePosition; local sz = kebab.AbsoluteSize
+                local vSize = (camera and camera.ViewportSize) or Vector2.new(1920, 1080)
+                yawOverlay.Position = UDim2.new(0, math.max(4, abs.X + sz.X - OVERLAY_W), 0, math.min(abs.Y + sz.Y + 4, vSize.Y - OVERLAY_H - 4))
+            else
+                tween(yawScale, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = 0})
+                task.delay(0.15, function() if not yawExpanded then yawOverlay.Visible = false end end)
+            end
+        end
+        kebab.MouseButton1Click:Connect(function() setYawExpanded(not yawExpanded) end)
+        yClose.MouseButton1Click:Connect(function() setYawExpanded(false) end)
+    end
+end
+toggle(aaSec, "At Direction")
+dropdown(aaSec, "At Direction Mode", {"At Targets", "At Edges"})
+
+local aaAdvSec = createSection(tabs["ANTIAIM"], "Advanced Settings", 325, 300, 460)
+slider(aaAdvSec, "Jitter Speed", 1, 100)
+slider(aaAdvSec, "Jitter Speed Multiplier", 1, 10)
+slider(aaAdvSec, "Spin Speed", 1, 100)
+slider(aaAdvSec, "Random Pitch Speed", 1, 100)
+slider(aaAdvSec, "Custom Pitch", -90, 90)
+toggle(aaAdvSec, "Fake Lag")
+slider(aaAdvSec, "Fake Lag ticks", 1, 14, false)
+slider(aaAdvSec, "Fake Lag limit", 1, 14, false)
+-- Fake Lag Duration removed per request
+toggle(aaAdvSec, "Enable Desync")
+slider(aaAdvSec, "Desync Range", 5, 50)
+toggle(aaAdvSec, "Enable Jitter Trail")
+do
+    local jitterToggleFrame = nil
+    for _, c in ipairs(aaSec:GetChildren()) do
+        if c:IsA("Frame") and c:FindFirstChild("TextLabel") and c.TextLabel.Text == "Enable Jitter Trail" then jitterToggleFrame = c end
+    end
+    -- Also check aaAdvSec potentially
+    if not jitterToggleFrame then
+        for _, c in ipairs(aaAdvSec:GetChildren()) do
+            if c:IsA("Frame") and c:FindFirstChild("TextLabel") and c.TextLabel.Text == "Enable Jitter Trail" then jitterToggleFrame = c end
+        end
+    end
+
+    if jitterToggleFrame then
+        local kebab = Instance.new("TextButton", jitterToggleFrame); kebab.Size = UDim2.new(0, 20, 0, 20); kebab.BackgroundTransparency = 1; kebab.Text = ""
+        -- Move exactly next to the 'l' and center vertically
+    if jitterToggleFrame:FindFirstChild("TextLabel") then
+            local tl = jitterToggleFrame.TextLabel
+            kebab.Position = UDim2.new(0, tl.TextBounds.X + 8, 0.5, -10)
+        else
+            kebab.Position = UDim2.new(1, -20, 0, 2)
+        end
+        local dotC = Instance.new("Frame", kebab); dotC.Size = UDim2.new(0, 11, 0, 3); dotC.Position = UDim2.new(0.5, -5.5, 0.5, -1.5); dotC.BackgroundTransparency = 1; local dl = Instance.new("UIListLayout", dotC); dl.FillDirection = Enum.FillDirection.Horizontal; dl.Padding = UDim.new(0, 1)
+        for i=1,3 do local d = Instance.new("Frame", dotC); d.Size = UDim2.new(0, 3, 0, 3); d.BackgroundColor3 = Color3.fromRGB(200, 180, 255); Instance.new("UICorner", d).CornerRadius = UDim.new(1, 0) end
+        
+        local jitterOverlay = Instance.new("Frame", gui); jitterOverlay.Size = UDim2.new(0, 270, 0, 100); jitterOverlay.BackgroundColor3 = Color3.fromRGB(6, 10, 19); jitterOverlay.Visible = false; jitterOverlay.ZIndex = 3000
+        Instance.new("UICorner", jitterOverlay).CornerRadius = UDim.new(0, 8); local jos = Instance.new("UIStroke", jitterOverlay); jos.Thickness = 1.5; jos.Color = Color3.fromRGB(160, 80, 255); jos.Transparency = 0.5
+        local joTitle = Instance.new("TextLabel", jitterOverlay); joTitle.Size = UDim2.new(1, 0, 0, 26); joTitle.BackgroundColor3 = Color3.fromRGB(15, 25, 45); joTitle.Text = "  Trail Settings"; joTitle.TextColor3 = Color3.fromRGB(230, 60, 60); joTitle.Font = Enum.Font.GothamBold; joTitle.TextSize = 13; joTitle.TextXAlignment = Enum.TextXAlignment.Left; Instance.new("UICorner", joTitle).CornerRadius = UDim.new(0, 8)
+        makeDraggable(jitterOverlay)
+        local joContent = Instance.new("Frame", jitterOverlay); joContent.Size = UDim2.new(1, 0, 1, -28); joContent.Position = UDim2.new(0, 0, 0, 28); joContent.BackgroundTransparency = 1; local joLayout = Instance.new("UIListLayout", joContent); joLayout.Padding = UDim.new(0, 12); joLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center; Instance.new("UIPadding", joContent).PaddingTop = UDim.new(0, 12)
+        dropdown(joContent, "Jitter Trail Material", {"ForceField", "Solid", "Glow", "Glow Outline", "Iridescent"})
+        local jScale = Instance.new("UIScale", jitterOverlay)
+        local jClose = Instance.new("TextButton", jitterOverlay); jClose.Size = UDim2.new(0, 24, 0, 24); jClose.Position = UDim2.new(1, -28, 0, 1); jClose.BackgroundTransparency = 1; jClose.Text = "X"; jClose.TextColor3 = Color3.fromRGB(200, 180, 255); jClose.Font = Enum.Font.GothamBold; jClose.TextSize = 14; jClose.ZIndex = 3002
+        local expanded = false
+        local function setExpanded(val)
+            expanded = val
+            if expanded then
+                jitterOverlay.Visible = true; jScale.Scale = 0; tween(jScale, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1})
+                local abs = kebab.AbsolutePosition; local sz = kebab.AbsoluteSize
+                local vpSize = (camera and camera.ViewportSize) or Vector2.new(1920, 1080)
+                jitterOverlay.Position = UDim2.new(0, math.max(4, abs.X + sz.X - 270), 0, math.min(abs.Y + sz.Y + 4, vpSize.Y - 110))
+            else
+                tween(jScale, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = 0}); task.delay(0.15, function() if not expanded then jitterOverlay.Visible = false end end)
+            end
+        end
+        kebab.MouseButton1Click:Connect(function() setExpanded(not expanded) end)
+        jClose.MouseButton1Click:Connect(function() setExpanded(false) end)
+    end
+end
+colorPicker(aaAdvSec, "Jitter Trail Color", Color3.fromRGB(160, 80, 255))
+
+-- TRIGGERBOT
+local tbSec = createSection(tabs["TRIGGERBOT"], "TriggerBot", 15, 300, 460, nil, "rbxassetid://4048495272")
+toggle(tbSec, "Enable Triggerbot")
+toggle(tbSec, "Trigger Team Check")
+toggle(tbSec, "Trigger Visibility Check")
+slider(tbSec, "Click Delay", 1, 100, false)
+
+-- MOVEMENT
+local movSec = createSection(tabs["MOVEMENT"], "Main Control", 15, 300, 460)
+toggle(movSec, "Speed Strafe")
+slider(movSec, "WalkSpeed Boost", 16, 150)
+toggle(movSec, "Enable Noclip")
+toggle(movSec, "Infinity Jump")
+
+local strafeSec = createSection(tabs["MOVEMENT"], "Strafe Settings", 325, 300, 460)
+toggle(strafeSec, "Airstrafe")
+slider(strafeSec, "Strafe Speed", 1, 100)
+
+-- MISC
+    miscSubTabs = createSubTabController(tabs["MISC"], {"Misc", "Spectate", "Server"})
+    local miscSec = createSection(miscSubTabs["Misc"], "Misc settings", 15, 300, 460)
+    toggle(miscSec, "Hitsound")
+    local hToggle = nil
+    for _, c in ipairs(miscSec:GetChildren()) do
+        if c:IsA("Frame") and c:FindFirstChild("TextLabel") and c.TextLabel.Text == "Hitsound" then hToggle = c end
+    end
+    if hToggle then
+        local hKebab = Instance.new("TextButton", hToggle)
+    hKebab.Size = UDim2.new(0, 30, 0, 30); hKebab.Position = UDim2.new(1, -30, 0.5, -15); hKebab.BackgroundTransparency = 1; hKebab.Text = ""
+    local hDotC = Instance.new("Frame", hKebab); hDotC.Size = UDim2.new(0, 11, 0, 3); hDotC.Position = UDim2.new(0.5, -5.5, 0.5, -1.5); hDotC.BackgroundTransparency = 1; local hdl = Instance.new("UIListLayout", hDotC); hdl.FillDirection = Enum.FillDirection.Horizontal; hdl.Padding = UDim.new(0, 1)
+    for i=1,3 do local d = Instance.new("Frame", hDotC); d.Size = UDim2.new(0, 3, 0, 3); d.BackgroundColor3 = Color3.fromRGB(200, 180, 255); Instance.new("UICorner", d).CornerRadius = UDim.new(1, 0) end
+
+    local hOverlay = Instance.new("Frame", gui); hOverlay.Size = UDim2.new(0, 270, 0, 150); hOverlay.BackgroundColor3 = Color3.fromRGB(6, 10, 19); hOverlay.BorderSizePixel = 0; hOverlay.ZIndex = 5000; hOverlay.Visible = false; Instance.new("UICorner", hOverlay).CornerRadius = UDim.new(0, 8)
+    local hoStroke = Instance.new("UIStroke", hOverlay); hoStroke.Thickness = 1.5; hoStroke.Color = Color3.fromRGB(160, 80, 255); hoStroke.Transparency = 0.5
+    local hoTitle = Instance.new("TextLabel", hOverlay); hoTitle.Size = UDim2.new(1, 0, 0, 30); hoTitle.BackgroundColor3 = Color3.fromRGB(15, 25, 45); hoTitle.Text = "  Hitsound Settings"; hoTitle.TextColor3 = Color3.fromRGB(160, 80, 255); hoTitle.Font = Enum.Font.GothamBold; hoTitle.TextSize = 13; hoTitle.TextXAlignment = Enum.TextXAlignment.Left; hoTitle.ZIndex = 2201; Instance.new("UICorner", hoTitle).CornerRadius = UDim.new(0, 8)
+    local hoClose = Instance.new("TextButton", hOverlay); hoClose.Size = UDim2.new(0, 24, 0, 24); hoClose.Position = UDim2.new(1, -28, 0, 3); hoClose.BackgroundTransparency = 1; hoClose.Text = "X"; hoClose.TextColor3 = Color3.fromRGB(200, 180, 255); hoClose.Font = Enum.Font.GothamBold; hoClose.TextSize = 14; hoClose.ZIndex = 5002
+    hoClose.MouseButton1Click:Connect(function() hOverlay.Visible = false end)
+    local hoScrollContainer = Instance.new("ScrollingFrame", hOverlay); hoScrollContainer.Size = UDim2.new(1, -10, 1, -40); hoScrollContainer.Position = UDim2.new(0, 5, 0, 35); hoScrollContainer.BackgroundTransparency = 1; hoScrollContainer.BorderSizePixel = 0; hoScrollContainer.ScrollBarThickness = 2
+    hoScrollContainer.CanvasSize = UDim2.new(0, 0, 0, 0)
+    local hoLayout = Instance.new("UIListLayout", hoScrollContainer); hoLayout.Padding = UDim.new(0, 6); hoLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    local function updateHoScroll() 
+        local cs = hoLayout and hoLayout.AbsoluteContentSize or Vector2.new(0, 0)
+        hoScrollContainer.CanvasSize = UDim2.new(0, 0, 0, cs.Y + 20) 
+    end
+    hoLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateHoScroll)
+
+    -- 3 hitsound options: Default (8679627751), 4753603610, 7269900245
+    dropdown(hoScrollContainer, "Hitsound Type", {"Default", "4753603610", "7269900245"})
+    slider(hoScrollContainer, "Hitsound Volume", 1, 50, false)
+    task.spawn(updateHoScroll)
+
+    local hScale = Instance.new("UIScale", hOverlay)
+    hKebab.MouseButton1Click:Connect(function()
+        hOverlay.Visible = not hOverlay.Visible
+        if hOverlay.Visible then
+            hScale.Scale = 0
+            tween(hScale, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1})
+            local abs = hKebab.AbsolutePosition
+            local vSize = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1920, 1080)
+            hOverlay.Position = UDim2.new(0, abs.X - 275, 0, math.min(abs.Y, vSize.Y - 150 - 4))
+        end
+    end)
+    makeDraggable(hOverlay)
+    end
+-- Combat utility toggles removed
+toggle(miscSec, "Auto Kill Chat")
+local kRow = createRow(miscSec, 35)
+local kMsgBox = Instance.new("TextBox", kRow)
+kMsgBox.Size = UDim2.new(1, 0, 0, 30); kMsgBox.Text = config["Kill Message"]; kMsgBox.BackgroundColor3 = Color3.fromRGB(30, 30, 35); kMsgBox.TextColor3 = Color3.fromRGB(255, 255, 255); kMsgBox.Font = Enum.Font.GothamBold; kMsgBox.TextSize = 14
+local kbs = Instance.new("UIStroke", kMsgBox); kbs.Thickness = 1; kbs.Color = Color3.new(0,0,0); kbs.Transparency = 0.5
+Instance.new("UICorner", kMsgBox)
+kMsgBox.FocusLost:Connect(function() config["Kill Message"] = kMsgBox.Text end)
+
+toggle(miscSec, "Stream Proof")
+toggle(miscSec, "Enable Name Spoof")
+local sRow = createRow(miscSec, 30)
+local spoofBox = Instance.new("TextBox", sRow)
+spoofBox.Size = UDim2.new(1, -4, 0, 24); spoofBox.BackgroundColor3 = Color3.fromRGB(33, 33, 38); spoofBox.TextColor3 = Color3.fromRGB(210, 210, 220); spoofBox.Text = config["Spoof Name"] or "HIDDEN NAME"; spoofBox.Font = Enum.Font.GothamBold; spoofBox.TextSize = 12
+Instance.new("UICorner", spoofBox).CornerRadius = UDim.new(0, 4)
+spoofBox.FocusLost:Connect(function() config["Spoof Name"] = spoofBox.Text end)
+
+-- Orbit Settings section removed per request.
+
+-- RapidFire / AvS2 settings removed
+local specSec = createSection(miscSubTabs["Spectate"], "Spectate Player", 15, 300, 460)
+local spectateTarget = nil
+local spectateEnabled = false
+
+local specListFrame = Instance.new("ScrollingFrame", specSec)
+specListFrame.Size = UDim2.new(1, -10, 0, 130)
+specListFrame.BackgroundColor3 = Color3.fromRGB(12, 20, 40)
+specListFrame.BackgroundTransparency = 0.3
+specListFrame.BorderSizePixel = 0
+specListFrame.ScrollBarThickness = 2
+specListFrame.ScrollBarImageColor3 = Color3.fromRGB(160, 80, 255)
+Instance.new("UICorner", specListFrame).CornerRadius = UDim.new(0, 6)
+local specLayout = Instance.new("UIListLayout", specListFrame)
+specLayout.Padding = UDim.new(0, 2)
+specLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+
+local specTargetLabel = Instance.new("TextLabel", specSec)
+specTargetLabel.Size = UDim2.new(1, -10, 0, 20)
+specTargetLabel.BackgroundTransparency = 1
+specTargetLabel.TextColor3 = Color3.fromRGB(180, 180, 200)
+specTargetLabel.Font = Enum.Font.GothamBold
+specTargetLabel.TextSize = 11
+specTargetLabel.Text = "Target: None"
+specTargetLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local function refreshSpecList()
+    for _, v in ipairs(specListFrame:GetChildren()) do
+        if v:IsA("TextButton") then v:Destroy() end
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player then
+            local btn = Instance.new("TextButton", specListFrame)
+            btn.Size = UDim2.new(1, -4, 0, 26)
+            local isSelected = (spectateTarget == p)
+            btn.BackgroundColor3 = isSelected and Color3.fromRGB(80, 40, 160) or Color3.fromRGB(20, 30, 60)
+            btn.BackgroundTransparency = 0.4
+            btn.TextColor3 = isSelected and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(200, 200, 220)
+            btn.Text = " " .. p.Name
+            btn.Font = Enum.Font.GothamBold
+            btn.TextSize = 12
+            btn.TextXAlignment = Enum.TextXAlignment.Left
+            Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+            btn.MouseButton1Click:Connect(function()
+            if spectateTarget == p then
+                spectateTarget = nil
+                spectateEnabled = false
+                specTargetLabel.Text = "Target: None"
+            else
+                spectateTarget = p
+                spectateEnabled = true
+                specTargetLabel.Text = "Target: " .. p.Name
+            end
+            refreshSpecList()
+        end)
+        end
+    end
+    local cs = specLayout and specLayout.AbsoluteContentSize or Vector2.new(0, 0)
+    specListFrame.CanvasSize = UDim2.new(0, 0, 0, cs.Y + 8)
+end
+task.spawn(function()
+    while task.wait(2) do
+        if _G.Unloaded then break end
+        refreshSpecList()
+    end
+end)
+refreshSpecList()
+
+local function updateSpectate()
+    if _G.Unloaded then return end
+    local cam = workspace.CurrentCamera
+    if spectateEnabled and spectateTarget then
+        local char = spectateTarget.Character
+        local root = char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Head"))
+        if root then
+            if cam.CameraType ~= Enum.CameraType.Scriptable then
+                cam.CameraType = Enum.CameraType.Scriptable
+            end
+            local targetPos = root.Position + Vector3.new(0, 4, 10)
+            local lookAt = root.Position
+            camera.CFrame = CFrame.lookAt(targetPos, lookAt)
+        end
+    else
+        if cam.CameraType == Enum.CameraType.Scriptable and not _aimActive then
+            cam.CameraType = Enum.CameraType.Custom
+            local myHum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+            if myHum then cam.CameraSubject = myHum end
+        end
+    end
+end
+RunService:BindToRenderStep("KrazzSpectate", Enum.RenderPriority.Camera.Value + 1, updateSpectate)
+
+-- Bullet Bypass section removed per request.
+
+local desyncSec = createSection(miscSubTabs["Server"], "Server Desync", 15, 300, 460)
+toggle(desyncSec, "Enable Server Desync")
+slider(desyncSec, "Server Desync Range", 1, 100)
+toggle(desyncSec, "Enable Shadow Clone")
+slider(desyncSec, "Shadow Clone Offset", 1, 20)
+slider(desyncSec, "Shadow Clone Count", 1, 5)
+
+sectionSubtitle(desyncSec, "Server Utilities")
+button(desyncSec, "Rejoin Server", function()
+    game:GetService("TeleportService"):Teleport(game.PlaceId, player)
+end)
+
+button(desyncSec, "Server Hop", function()
+    local Http = game:GetService("HttpService")
+    local TPS = game:GetService("TeleportService")
+    local Api = "https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+    local function NextServer(cursor)
+        local url = Api .. (cursor and "&cursor=" .. cursor or "")
+        local success, result = pcall(function() return Http:JSONDecode(game:HttpGet(url)) end)
+        if success and result and result.data then
+            for _, server in ipairs(result.data) do
+                if server.playing < server.maxPlayers and server.id ~= game.JobId then
+                    return server.id
+                end
+            end
+            if result.nextPageCursor then return NextServer(result.nextPageCursor) end
+        end
+    end
+    local serverId = NextServer()
+    if serverId then TPS:TeleportToPlaceInstance(game.PlaceId, serverId, player) end
+end)
+
+local advMiscSec = createSection(miscSubTabs["Misc"], "Advance settings", 325, 300, 150, 35)
+toggle(advMiscSec, "Hotkeys UI")
+slider(advMiscSec, "Hotkeys Pos X", 0, 2000)
+slider(advMiscSec, "Hotkeys Pos Y", 0, 2000)
+
+task.spawn(function()
+    while task.wait(0.5) do
+        if _G.Unloaded then break end
+        pcall(function()
+            if config["Stream Proof"] then
+                local cg = (gethui and gethui()) or game:GetService("CoreGui")
+                if gui and gui.Parent ~= cg then 
+                    gui.Parent = cg 
+                end
+            else
+                local pg = player:FindFirstChild("PlayerGui")
+                if gui and pg and gui.Parent ~= pg then 
+                    gui.Parent = pg 
+                end
+            end
+        end)
+    end
+end)
+
+-- ============================================================
+-- CUSTOM CURSOR ( (K) Logo for First-Person )
+-- ify with Phantom Cursor (Instance-based)
+
+local CONFIG_PATH = "krazz_config.txt"
+local SKIP_KEYS = {}
+local setSec = createSection(tabs["SETTINGS"], "Configurations", 15, 300, 460)
+
+local cfFolder = "KrazzConfigs"
+if not isfolder(cfFolder) then makefolder(cfFolder) end
+
+local selectedConfig = ""
+local configList = {}
+
+local listFrame = Instance.new("ScrollingFrame", setSec)
+listFrame.Size = UDim2.new(1, -10, 0, 180); listFrame.BackgroundColor3 = Color3.fromRGB(15, 25, 45); listFrame.BorderSizePixel = 0; listFrame.ScrollBarThickness = 2; listFrame.Position = UDim2.new(0, 5, 0, 5)
+pcall(function() listFrame.AutomaticCanvasSize = Enum.AutomaticCanvasSize.Y end)
+local listLayout = Instance.new("UIListLayout", listFrame); listLayout.Padding = UDim.new(0, 2)
+Instance.new("UICorner", listFrame)
+
+local configInput = Instance.new("TextBox", setSec)
+configInput.Size = UDim2.new(1, -20, 0, 30); configInput.Position = UDim2.new(0, 10, 0, 190); configInput.BackgroundColor3 = Color3.fromRGB(33, 33, 38); configInput.TextColor3 = Color3.fromRGB(255, 255, 255); configInput.Font = Enum.Font.GothamBold; configInput.TextSize = 13; configInput.PlaceholderText = "Config Name..."; configInput.Text = ""
+Instance.new("UICorner", configInput)
+local cibS = Instance.new("UIStroke", configInput); cibS.Thickness = 1; cibS.Color = Color3.fromRGB(160, 80, 255); cibS.Transparency = 0.5
+
+local function updateList()
+    for _, v in ipairs(listFrame:GetChildren()) do if v:IsA("TextButton") then v:Destroy() end end
+    local files = listfiles(cfFolder)
+    for _, file in ipairs(files) do
+        local name = file:match("([^\\/]+)$"):gsub("%.json$", "")
+        if name then
+            local b = Instance.new("TextButton", listFrame)
+            b.Size = UDim2.new(1, 0, 0, 30); b.BackgroundTransparency = (selectedConfig == name) and 0.5 or 0.9; b.BackgroundColor3 = Color3.fromRGB(60, 110, 230); b.TextColor3 = Color3.fromRGB(255, 255, 255); b.Text = " " .. name; b.Font = Enum.Font.GothamBold; b.TextSize = 13; b.TextXAlignment = Enum.TextXAlignment.Left
+            Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
+            b.MouseButton1Click:Connect(function() selectedConfig = name; configInput.Text = name; updateList() end)
+        end
+    end
+    local cs = listLayout and listLayout.AbsoluteContentSize or Vector2.new(0, 0)
+    listFrame.CanvasSize = UDim2.new(0, 0, 0, cs.Y + 10)
+end
+updateList()
+
+local function loadConfig(name)
+    local path = cfFolder.."/"..name..".json"
+    if isfile(path) then
+        local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+        if ok and type(data) == "table" then
+        for k, v in pairs(data) do
+            if type(v) == "table" and v.r and v.g and v.b then
+                config[k] = Color3.new(v.r, v.g, v.b)
+            elseif type(v) == "table" and v["__enum"] then
+                local parts = string.split(v["__enum"], ".")
+                if #parts == 3 then
+                    pcall(function() config[k] = Enum[parts[2]][parts[3]] end)
+                else
+                    config[k] = v
+                end
+            else
+                config[k] = v
+            end
+            if uiRegistry[k] then pcall(function() uiRegistry[k](config[k]) end) end
+        end
+            game:GetService("StarterGui"):SetCore("SendNotification", {Title="KRAZZ", Text="Loaded: "..name, Duration=2})
+        end
+    end
+end
+
+local function saveConfig(name)
+    if name == "" then return end
+    local path = cfFolder.."/"..name..".json"
+    local cleanCfg = {}
+    for k, v in pairs(config) do
+        if typeof(v) == "Color3" then
+            cleanCfg[k] = {r=v.R, g=v.G, b=v.B}
+        elseif typeof(v) == "EnumItem" then
+            cleanCfg[k] = {["__enum"] = tostring(v)}
+        else
+            cleanCfg[k] = v
+        end
+    end
+    writefile(path, HttpService:JSONEncode(cleanCfg))
+    game:GetService("StarterGui"):SetCore("SendNotification", {Title="KRAZZ", Text="Saved: "..name, Duration=2})
+    updateList()
+end
+
+button(setSec, "Load", function() loadConfig(configInput.Text) end)
+button(setSec, "Save", function() saveConfig(configInput.Text) end)
+button(setSec, "Delete", function() local p = cfFolder.."/"..configInput.Text..".json" if isfile(p) then delfile(p) updateList() end end)
+button(setSec, "Reset", function() for k, v in pairs(defaultConfig) do config[k] = v; if uiRegistry[k] then uiRegistry[k](v) end end end)
+
+local menuSec = createSection(tabs["SETTINGS"], "UI Settings", 325, 300, 460)
+bindComponent(menuSec, "Menu Key", "MenuKey")
+button(menuSec, "Unload Script", cleanup)
+
+table.insert(state.connections, UIS.InputBegan:Connect(function(input)
+    if not state.Authenticated then return end
+    if input.KeyCode == state.config["MenuKey"] then 
+        if state.toggleMenu then state.toggleMenu() end
+    end
+end))
+    end
+end)
+if not ok_misc then warn("[KRAZZ] Misc scope error: " .. tostring(err_misc)) end
+
+
+
+
+-- for stability
+local gParams = RaycastParams.new()
+gParams.FilterType = Enum.RaycastFilterType.Exclude
+local function updateGParams()
+    local cam = workspace.CurrentCamera
+    local myChar = player.Character
+    local kv = cam and cam:FindFirstChild("KrazzVisuals")
+    local kv2 = workspace:FindFirstChild("KrazzVisuals")
+    local filter = {}
+    if myChar then table.insert(filter, myChar) end
+    if cam then table.insert(filter, cam) end
+    if kv then table.insert(filter, kv) end
+    if kv2 then table.insert(filter, kv2) end
+    gParams.FilterDescendantsInstances = filter
+end
+
+state.isVisible = function(part, character)
+    if not config["Visibility Check"] then return true end
+    local ok, result = pcall(function()
+        local cam = workspace.CurrentCamera
+        local origin = camera.CFrame.Position
+        if config["Third Person"] and player.Character and player.Character:FindFirstChild("Head") then
+            origin = player.Character.Head.Position + Vector3.new(0, 1.5, 0)
+        end
+        updateGParams()
+        local dir = (part.Position + Vector3.new(0, 0.5, 0)) - origin
+        local res = workspace:Raycast(origin, dir, gParams)
+        if res and res.Instance then
+            local hit = res.Instance
+            if hit:IsDescendantOf(character) or hit == character then return true end
+            if hit.Parent and (hit.Parent:IsA("Accessory") or hit.Parent:IsA("Hat")) and hit.Parent.Parent == character then return true end
+            return false
+        end
+        return true
+    end)
+    if not ok then return true end
+    return result
+end
+
+local SilentToggle = false
+table.insert(connections, UIS.InputBegan:Connect(function(input, gp) 
+    if not gp and (input.KeyCode == config["SilentAimKey"] or input.UserInputType == config["SilentAimKey"]) then 
+        SilentToggle = not SilentToggle 
+    end 
+end))
+
+local VIM = game:GetService("VirtualInputManager")
+state.getPart = function(char, tag)
+    if not char then return nil end
+    local part = char:FindFirstChild(tag)
+    if part and part:IsA("BasePart") then return part end
+    
+    if tag == "Head" then 
+        return char:FindFirstChild("Head") or char:FindFirstChild("UpperTorso")
+    elseif tag == "UpperTorso" or tag == "Torso" then
+        return char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") or char:FindFirstChild("HumanoidRootPart")
+    elseif tag == "HumanoidRootPart" then        return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso")
+    end
+    return char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart") 
+end
+
+state.getSilentTarget = function()
+    if not config["Enable Silent Aim"] then return nil end
+    local silentMode = config["Silent Aim Mode"]
+    local cam = workspace.CurrentCamera
+    local viewportSize = cam.ViewportSize
+    local aimRef = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+    local is360 = config["Silent Aim 360 FOV"]
+    local target = nil
+    local bestScore = math.huge
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local distOrigin = root and root.Position or camera.CFrame.Position
+    local distOrigin = camera.CFrame.Position
+
+    -- KEY-BIND CHECK (Silent Aim)
+    if config["Silent Aim Mode"] ~= "Always" then
+        local k = config["SilentAimKey"]
+        if k then
+            local isDown = false
+            pcall(function() 
+                if k.EnumType == Enum.KeyCode then isDown = UIS:IsKeyDown(k) 
+                elseif k.EnumType == Enum.UserInputType then isDown = UIS:IsMouseButtonPressed(k) end
+            end)
+            if not isDown then return nil end
+        end
+    end
+
+    -- STICKY AIM (Silent Aim)
+    if config["Silent Sticky Aim"] and _G.KrazzAimbotTarget then
+        local prev = _G.KrazzAimbotTarget
+        local pChar = prev.Parent
+        local pHum = pChar and pChar:FindFirstChildOfClass("Humanoid")
+        if pHum and pHum.Health > 0 and (pChar:FindFirstChild("HumanoidRootPart") or pChar:FindFirstChild("Head")) then
+            local pDist = (distOrigin - prev.Position).Magnitude
+            if pDist <= (config["Silent Max Distance"] or 1000) then
+                local sPos, onS = cam:WorldToViewportPoint(prev.Position)
+                if is360 or onS then
+                    local mag = (Vector2.new(sPos.X, sPos.Y) - aimRef).Magnitude
+--                     if it moves near the FOV edge
+    local fovLimit = (is360 and math.huge or (config["Silent Aim FOV"] * 2.5)) 
+                    if mag < fovLimit then
+                        if not config["Silent Visibility Check"] or isVisible(prev, pChar) then
+                            return prev
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then
+            local pChar = p.Character
+            local ok = true
+            if config["Silent Aim Team Check"] and p.Team == player.Team then ok = false end
+            
+            if ok then
+                local hum = pChar:FindFirstChildOfClass("Humanoid")
+                local targetPart = getPart(pChar, config["Silent Aim Target Part"] or "Head")
+                
+                if hum and hum.Health > 0 and targetPart then
+                    local physDist = (distOrigin - targetPart.Position).Magnitude
+                    local maxD = config["Silent Aim Max Distance"] or 1000
+                    
+                    if physDist <= maxD then
+                        local visible = true
+                        if config["Silent Aim Visibility Check"] then
+                            if not state.isVisible(targetPart, pChar) then visible = false end
+                        end
+                        
+                        if visible then
+                            local pos, onS = cam:WorldToViewportPoint(targetPart.Position)
+                            if is360 or onS then
+                                local mag = (Vector2.new(pos.X, pos.Y) - aimRef).Magnitude
+                                if mag < bestScore and (is360 or mag <= (config["Silent Aim FOV"] or 150)) then
+                                    target = targetPart
+                                    bestScore = mag
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    _G.KrazzAimbotTarget = target
+    return target
+end
+state.getSilentTarget = state.getSilentTarget
+
+--// COMBAT CORE UTILS (Restored)
+-- getAimbotKeyDown consolidated to line 3470
+
+state.getClosestPlayer = function()
+    local target = nil
+    local dist = config["Aimbot FOV"] or 150
+    local cam = workspace.CurrentCamera
+    local lpos = UIS:GetMouseLocation()
+    
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then
+            local char = p.Character
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            local part = char:FindFirstChild(config["Target Part"]) or char:FindFirstChild("Head") or char:FindFirstChild("UpperTorso")
+            
+            if hum and hum.Health > 0 and part then
+                local isT = true
+                if config["Team Check"] and p.Team == player.Team then isT = false end
+                if isT and char:FindFirstChildOfClass("ForceField") then isT = false end
+                
+                if isT then
+                    local d3 = (camera.CFrame.Position - part.Position).Magnitude
+                    if d3 <= (config["Aimbot Max Distance"] or 1000) then
+                        local pos, onS = cam:WorldToViewportPoint(part.Position)
+                        if onS then
+                            local mag = (Vector2.new(pos.X, pos.Y) - lpos).Magnitude
+                            if mag < dist then
+                                if not config["Visibility Check"] or state.isVisible(part, char) then
+                                    dist = mag
+                                    target = p
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    _G.KrazzAimbotTarget = target and target.Character and (target.Character:FindFirstChild("Head") or target.Character.PrimaryPart) or nil
+    return target
+end
+
+function aimAtTarget(target)
+    if not target or not target.Character then return end
+    local char = target.Character
+    local part = char:FindFirstChild(config["Target Part"]) or char:FindFirstChild("Head") or char:FindFirstChild("UpperTorso")
+    if not part then return end
+    
+    local cam = workspace.CurrentCamera
+    local pPos = part.Position
+    
+    -- Prediction
+    if config["Prediction"] then
+        local vel = part.Velocity
+        pPos = pPos + (vel * Vector3.new(config["Aim Prediction X"], config["Aim Prediction Y"], config["Aim Prediction X"]))
+    end
+    
+    local method = config["Aimbot Method"] or (state.isMobile and "Mobile Lock" or "Camera Lock")
+    if method == "Camera Lock" then
+        local sensitivity = (config["Smoothing"] or 1)
+        if sensitivity > 1 then
+            camera.CFrame = camera.CFrame:Lerp(CFrame.new(camera.CFrame.Position, pPos), 1/sensitivity)
+        else
+            camera.CFrame = CFrame.new(camera.CFrame.Position, pPos)
+        end
+    elseif method == "Mouse Aim" then
+        local pos = cam:WorldToViewportPoint(pPos)
+        local lpos = UIS:GetMouseLocation()
+        mousemoverel((pos.X - lpos.X) / (config["Smoothing"] or 1), (pos.Y - lpos.Y) / (config["Smoothing"] or 1))
+    elseif method == "Mobile Lock" then
+        -- Mobile-safe: mousemoverel without touching CameraType (preserves mobile thumbstick)
+        local pos = cam:WorldToViewportPoint(pPos)
+        local lpos = UIS:GetMouseLocation()
+        local smooth = math.max(config["Smoothing"] or 5, 1)
+        pcall(mousemoverel, (pos.X - lpos.X) / smooth, (pos.Y - lpos.Y) / smooth)
+    end
+end
+
+
+local _sa_target = nil
+local _sa_last_time = 0
+local _sa_decision = false
+local _sa_forced_part = nil
+local SA_WINDOW = 0.12 
+-- : mouse.Hit/UnitRay-- 
+local _sa_shoot_time = 0
+local SA_SHOOT_WINDOW = 0.08 -- (80ms)
+
+function _sa_calcEPos(target)
+    local fallback = Vector3.new(0,0,0)
+    if not target then return fallback end
+    
+    local pos = nil
+    local ok = pcall(function()
+        if target:IsA("BasePart") or target:IsA("Model") then
+            pos = target:GetPivot().Position
+        end
+    end)
+    
+    if not ok or not pos then return fallback end
+
+    --[[ STABLE HITSCAN (Server-Safe) ]]
+    local jitter = Vector3.new(
+        math.random(-10, 10)/100,
+        math.random(-6, 6)/100,
+        math.random(-10, 10)/100
+    )
+    return pos + jitter
+end
+
+function _sa_refresh()
+    local now = os.clock()
+    if now - _sa_last_time > SA_WINDOW then
+        _sa_target = currentSilentTarget
+        
+        --[[ HUMANIZED ACCURACY (Manual Ban Safeguard) ]]
+--         if hitchance is 100%, occasionally aim for the torso or "miss" 
+        -- to avoid perfectly consistent headshot logs.
+    local hChance = config["Silent Aim Hitchance"] or 100
+        _sa_decision = _sa_target ~= nil and (math.random(1, 100) <= hChance)
+        
+        -- Override target part to torso occasionally (human logic)
+    if _sa_decision and math.random(1, 100) > 85 then
+             _sa_forced_part = "UpperTorso"
+        else
+             _sa_forced_part = nil
+        end
+        
+        _sa_last_time = now
+    end
+end
+
+local function replaceInTable(tbl, ePos)
+    local newTbl = {}
+    local modified = false
+    for k, v in pairs(tbl) do
+        if typeof(v) == "Vector3" then
+            if _sa_target then
+                newTbl[k] = _sa_calcEPos(_sa_target)
+                modified = true
+            else
+                newTbl[k] = v
+            end
+        elseif typeof(v) == "CFrame" then
+            if _sa_target then
+                newTbl[k] = CFrame.new(_sa_calcEPos(_sa_target))
+                modified = true
+            else
+                newTbl[k] = v
+            end
+        elseif typeof(v) == "Instance" then
+            local ok, isPart = pcall(function() return v:IsA("BasePart") end)
+            if ok and isPart then
+                if _sa_target then
+                    newTbl[k] = _sa_target
+                    modified = true
+                else
+                    newTbl[k] = v
+                end
+            else
+                newTbl[k] = v
+            end
+        elseif typeof(v) == "table" then
+            local subTbl, mod = replaceInTable(v, ePos)
+            newTbl[k] = subTbl
+            if mod then modified = true end
+        else
+            newTbl[k] = v
+        end
+    end
+    return newTbl, modified
+end
+
+-- Stealth Hook Manager (mvs2 Stability Optimized)
+-- ============================================================
+-- for Yub-X)
+-- Name Spoof: uses a separate safe __namecall hook
+-- if called too early.
+-- We delay application and guard against recursion safely.
+-- ============================================================
+local checkcaller = checkcaller or is_sirhurt_closure or function() return false end
+local busyIndex = false
+local hooksApplied = false
+-- local oldIndex, oldNamecall
+
+-- Name Spoof safe string storage (avoid calling rawget/rawequal on player inside hook)
+local _spoofedName = "KrazzUser"
+local _spoofEnabled = false
+
+-- Update spoof vars from config safely (called from outside the hook)
+local function updateSpoofVars()
+    _spoofEnabled = config["Enable Name Spoof"] and true or false
+    _spoofedName = tostring(config["Spoof Name"] or "KrazzUser")
+end
+task.spawn(function()
+    while task.wait(0.5) do
+        if _G.Unloaded then break end
+        updateSpoofVars()
+    end
+end)
+
+local function applyAtomicHooks()
+    if hooksApplied or _G.Unloaded then return end
+    hooksApplied = true
+    
+    local success, err = pcall(function()
+--         local oldIndex, oldNewIndex, oldFireServer, oldInvokeServer, oldGetFullName
+        local _in_lobby_cache = true
+        
+        --[[ LOBBY CACHE SYSTEM ]]
+        task.spawn(function()
+            while task.wait(0.5) do
+                if _G.Unloaded then break end
+                local ok, res = pcall(function()
+                    local t = player.Team
+                    return (not t) or (t.Name == "Neutral") or (t.Name == "Choosing")
+                end)
+                _in_lobby_cache = ok and res or false
+            end
+        end)
+
+        --[[ PROPERTY MASKING (__index) ]]
+        oldIndex = hookmetamethod(game, "__index", newcclosure(function(self, index)
+            if checkcaller() or _in_lobby_cache then return oldIndex(self, index) end
+            
+            if not _G.Unloaded then
+                local sName = tostring(index)
+                -- 1. Anti-Cheat Property Masking
+    if (sName == "WalkSpeed" and (config["WalkSpeed Boost"] or 16) > 16) or (sName == "JumpPower" and (config["JumpPower Boost"] or 0) > 50) then
+                    if rawequal(self, myHum) then return getSafe(sName) end
+                elseif (sName == "CFrame" or sName == "Velocity") and rawequal(self, myHRP) then
+                    return safe_properties[sName]
+                end
+
+                -- 2. Silent Aim Intercept (Mouse)
+    if config["Enable Silent Aim"] and rawequal(self, mouse) and (index == "Hit" or index == "Target" or index == "UnitRay") then
+                    local now = os.clock()
+                    if now - _sa_shoot_time <= SA_SHOOT_WINDOW then
+                        _sa_refresh()
+                        if _sa_decision and _sa_target then
+                            local target = _sa_forced_part and _sa_target.Parent:FindFirstChild(_sa_forced_part) or _sa_target
+                            local ePos = _sa_calcEPos(target)
+                            if index == "Hit" then return CFrame.new(ePos)
+                            elseif index == "UnitRay" then
+                                local oRay = oldIndex(self, "UnitRay")
+                                return Ray.new(oRay.Origin, (ePos - oRay.Origin).Unit)
+                            elseif index == "Target" then return _sa_target end
+                        end
+                    end
+                end
+
+            end
+            return oldIndex(self, index)
+        end))
+
+        --[[ CHARACTER PROTECTION (__newindex) ]]
+        oldNewIndex = hookmetamethod(game, "__newindex", newcclosure(function(self, index, value)
+            if checkcaller() then return oldNewIndex(self, index, value) end
+            if not _G.Unloaded then
+                local sName = tostring(index)
+                if (sName == "WalkSpeed" or sName == "JumpPower") and rawequal(self, myHum) then
+                    return oldNewIndex(self, index, value)
+                end
+            end
+            return oldNewIndex(self, index, value)
+        end))
+
+        --[[ UNIFIED ATOMIC HOOK (__namecall) ]]
+-- iff 2 & Yub-X
+    local oldNamecall
+        oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+            if _G.Unloaded then return oldNamecall(self, ...) end
+            local method = getnamecallmethod()
+            local rawArgs = {...}
+            
+            --[[ REGISTRATION & MONITORING (Deep Mining) ]]
+    if method == "FireServer" or method == "InvokeServer" then
+                local rName = string.lower(typeof(self) == "Instance" and self.Name or "")
+--                 for master remotes
+    local isWeapon = rName:find("hit") or rName:find("damage") or rName:find("shoot") or rName:find("bullet") or rName:find("fire") or rName:find("master") or rName:find("action") or rName:find("event") or rName:find("comm")
+                
+                if isWeapon then
+                    getgenv()._KrazzLastShotAny = os.clock()
+                    
+--                     ific Revolver Combat Detection
+    local tool = player.Character and player.Character:FindFirstChildOfClass("Tool")
+                    if tool and (string.lower(tool.Name):find("revolver")) then
+                        getgenv().KrazzRevolverFiring = os.clock()
+                    end
+
+                    local tPlr = scanArgsForTarget(rawArgs)
+                    if tPlr then
+                        getgenv()._localHitRegister[tPlr] = os.clock()
+                        getgenv()._KrazzTargetLock = tPlr
+                        getgenv()._KrazzPriorityTarget = tPlr
+                    end
+                end
+
+--                 ified Deep) ]]
+    if method == "FireServer" and config["Enable Silent Aim"] and isWeapon then
+                    _sa_refresh()
+                    if _sa_decision and state.getSilentTarget() and state.isVisible(state.getSilentTarget(), state.getSilentTarget().Parent) then
+                        local ePos = _sa_calcEPos(_sa_target)
+                        local tPlr = Krazz_GetPlayer(_sa_target)
+                        if tPlr then
+                            getgenv()._localHitRegister[tPlr] = os.clock()
+                            getgenv()._KrazzTargetLock = tPlr
+                            getgenv()._KrazzPriorityTarget = tPlr
+                        end
+                        
+                        local replaced = false
+                        for i, arg in ipairs(rawArgs) do
+                            if typeof(arg) == "Vector3" then
+                                rawArgs[i] = ePos; replaced = true
+                            elseif typeof(arg) == "Instance" and arg:IsA("BasePart") then
+                                rawArgs[i] = _sa_target; replaced = true
+                            elseif typeof(arg) == "table" then
+--                                 for obfuscated games
+    local function deepReplace(tbl)
+                                    for k, v in pairs(tbl) do
+                                        if typeof(v) == "Vector3" then tbl[k] = ePos; replaced = true
+                                        elseif typeof(v) == "Instance" and v:IsA("BasePart") then tbl[k] = _sa_target; replaced = true
+                                        elseif typeof(v) == "table" then deepReplace(v) end
+                                    end
+                                end
+                                deepReplace(arg)
+                            end
+                        end
+                        if replaced then
+                            getgenv()._sa_shoot_time = os.clock()
+                            return oldNamecall(self, unpack(rawArgs))
+                        end
+                    end
+                end
+            end
+            return oldNamecall(self, ...)
+        end)
+
+        pcall(function() game:GetService("StarterGui"):SetCore("SendNotification", {Title="KRAZZ.WIN", Text="Atomic Stabilization Active", Duration=3}) end)
+        -- Atomic Hook Engine Online. (log removed)
+    end)
+    
+    if not success then
+        -- Hook Engine Failed (log removed)
+        hooksApplied = false
+    end
+end
+
+-- Delay application to ensure game instance is ready
+task.spawn(function()
+    task.wait(1.5)
+    while task.wait(0.5) do
+        if _G.Unloaded then break end
+        if not hooksApplied then applyAtomicHooks() end
+    end
+end)
+
+-- AURA SYSTEMS REMOVED (Melee Aura, Teleport Aura)
+function getAimbotKeyDown()
+    if getgenv()._KrazzMobileAimLock then return true end
+    local key = config["Aimbot Key"]
+    if not key or typeof(key) ~= "EnumItem" then return false end
+    local ok, res = pcall(function()
+        if key.EnumType == Enum.KeyCode then return UIS:IsKeyDown(key) end
+        if key.EnumType == Enum.UserInputType then return UIS:IsMouseButtonPressed(key) end
+    end)
+    return ok and res or false
+end
+
+-- ific Team Check Logic (Supports Rivals / AvS2 & Standard Teams)
+function isFriendly(p)
+    if not p or p == player then return true end
+    if not config["Aimbot Team Check"] then return false end
+    
+    -- 1. Standard Roblox Team Check
+    if p.Team and player.Team and p.Team == player.Team then 
+        return true 
+    end
+    
+-- ific Check
+--     iff, Civilian, Innocent
+    local myRole = player:FindFirstChild("Role") or (player.Character and player.Character:FindFirstChild("Role"))
+    local targetRole = p:FindFirstChild("Role") or (p.Character and p.Character:FindFirstChild("Role"))
+    
+    if targetRole then
+        local rName = string.lower(tostring(targetRole.Value))
+        -- Civilians and Innocents are always friendly/neutral unless we are an Assassin
+    if rName:find("civilian") or rName:find("innocent") then
+-- iff, don't hit Civilians
+    if myRole and string.lower(tostring(myRole.Value)):find("sheriff") then
+                return true
+            end
+--             for safety
+    return true
+        end
+        -- Team-based logic within roles
+    if myRole and string.lower(tostring(myRole.Value)) == rName then
+            return true
+        end
+    end
+    
+    return false
+end
+
+local _lastAimbotTarget = nil
+function getClosestPlayer()
+    local cam = workspace.CurrentCamera
+    if not cam then return nil end
+    -- On mobile there is no stable cursor: always use screen centre as FOV reference.
+    local vps = cam.ViewportSize
+    local mPos = state.isMobile
+        and Vector2.new(vps.X / 2, vps.Y / 2)
+        or getMousePos()
+    local bestDist = config["Aimbot FOV"] or 150
+    local target = nil
+    local maxDist = config["Aimbot Max Distance"] or 2000
+
+    -- STICKY AIM (Aimbot)
+    if config["Aimbot Sticky Aim"] and _lastAimbotTarget then
+        local pChar = _lastAimbotTarget.Parent
+        if pChar then
+            local partName = config["Target Part"] or "Head"
+            local truePart = pChar:FindFirstChild(partName)
+            if partName == "Torso" then truePart = pChar:FindFirstChild("UpperTorso") or pChar:FindFirstChild("Torso") end
+            truePart = truePart or pChar:FindFirstChild("Head") or pChar.PrimaryPart
+            
+            _lastAimbotTarget = truePart or _lastAimbotTarget
+
+            local pHum = pChar:FindFirstChildOfClass("Humanoid")
+            if pHum and pHum.Health > 0 and (pChar:FindFirstChild("HumanoidRootPart") or pChar:FindFirstChild("Head")) then
+                local physDist = (camera.CFrame.Position - _lastAimbotTarget.Position).Magnitude
+                if physDist <= maxDist then
+                    local pos, onS = cam:WorldToViewportPoint(_lastAimbotTarget.Position)
+                    if onS then
+                        local mag = (Vector2.new(pos.X, pos.Y) - mPos).Magnitude
+--                         if target moves further from center
+    local fovLimit = (config["Aimbot FOV"] or 150) * 2.5
+                        if mag < fovLimit then
+                            if not config["Visibility Check"] or state.isVisible(_lastAimbotTarget, pChar) then
+                                return _lastAimbotTarget
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then
+            local char = p.Character
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            
+            local partName = config["Target Part"] or "Head"
+            local part = char:FindFirstChild(partName)
+            if partName == "Torso" then part = char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso") end
+            part = part or char:FindFirstChild("Head") or char.PrimaryPart
+            
+            if hum and hum.Health > 0 and part then
+                local physDist = (camera.CFrame.Position - part.Position).Magnitude
+                if physDist <= maxDist then
+                    local ok = true
+                    if isFriendly(p) then ok = false end
+                    if ok and char:FindFirstChildOfClass("ForceField") then ok = false end
+
+
+                    if ok then
+                        local pos, onS = cam:WorldToViewportPoint(part.Position)
+                        if onS then
+                            local mag = (Vector2.new(pos.X, pos.Y) - mPos).Magnitude
+                            if mag < bestDist then
+                                -- Target closest to screen center (Smallest magnitude)
+    if not config["Visibility Check"] or state.isVisible(part, char) then
+                                    target = part
+                                    bestDist = mag
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    _lastAimbotTarget = target
+    return target
+end
+state.getClosestPlayer = getClosestPlayer
+
+-- ============================================================
+-- AIMBOT CORE (Yub-X / AvS2 - RenderStepped based)
+-- Lock camera using Scriptable CameraType so CFrame sticks.
+-- Restore to Custom when aimbot is not active.
+-- ============================================================
+function aimAtTarget(target)
+    if not target then return end
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    local smooth = math.max(config["Smoothing"] or 5, 1)
+    
+    -- Prediction & Position Logic
+    local targetChar = target.Parent
+    local targetRoot = targetChar and (targetChar:FindFirstChild("HumanoidRootPart") or targetChar:FindFirstChild("LowerTorso") or targetChar:FindFirstChild("Torso"))
+    local vel = (targetRoot and targetRoot.AssemblyLinearVelocity) or Vector3.zero
+    if vel.Magnitude < 0.1 then vel = target.AssemblyLinearVelocity or Vector3.zero end
+    
+    local predX = config["Prediction"] and (config["Aim Prediction X"] or 0.165) or 0
+    local targetPos = target.Position + (vel * predX)
+    -- On mobile we ALWAYS use Mobile Lock regardless of what config says,
+    -- because Camera Lock / Mouse Aim require Scriptable camera or mousemoverel
+    -- which may break mobile thumbstick or simply not work on Delta / Ronix.
+    local method = state.isMobile and "Mobile Lock" or (config["Aimbot Method"] or "Camera Lock")
+    local isMobileLock = (method == "Mobile Lock")
+
+    -- UNIFIED SCRIPTABLE LOGIC (Complete Camera Lock behavior)
+    -- Mobile Lock skips Scriptable to preserve mobile thumbstick / avoid spectator-camera detach
+    if not isMobileLock then
+        cam.CameraType = Enum.CameraType.Scriptable
+    end
+    
+    local myChar = player.Character
+    local myHum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+    if myHum and not isMobileLock then pcall(function() myHum.AutoRotate = false end) end
+
+    local targetCF = CFrame.lookAt(camera.CFrame.Position, targetPos)
+
+    if method == "Camera Lock" then
+        --[[ IMPROVED CAMERA LOCK ]]
+        -- Hard lock when close (snap), soft lerp when far (smooth)
+    local fwd = camera.CFrame.LookVector
+        local dot = math.clamp(fwd:Dot(targetCF.LookVector), -1, 1)
+        local angErr = math.acos(dot) -- Angular error in radians
+        -- Dynamic alpha: faster when target is far off-center, slower when near
+    local baseAlpha = 1 / math.max(smooth * 0.65, 1)
+        local dynamicBoost = math.clamp(angErr / math.rad(30), 0, 2.5)
+        local lerpAlpha = math.clamp(baseAlpha * (1 + dynamicBoost), 0.02, 1)
+        camera.CFrame = camera.CFrame:Lerp(targetCF, lerpAlpha)
+    elseif method == "Mouse Aim" then
+        --[[ IMPROVED MOUSE AIM ]]
+        -- Velocity-compensated silky smooth aim
+    local fwd = camera.CFrame.LookVector
+        local dot = math.clamp(fwd:Dot(targetCF.LookVector), -1, 1)
+        local angErr = math.acos(dot)
+        -- High smoothing baseline, but accelerates when angle is large
+    local baseAlpha = 1 / math.max(smooth * 3.5, 1)
+        local accel = math.clamp(angErr / math.rad(15), 0, 3)
+        local lerpAlpha = math.clamp(baseAlpha * (1 + accel * 0.6), 0.005, 0.6)
+        camera.CFrame = camera.CFrame:Lerp(targetCF, lerpAlpha)
+    elseif method == "Matcha" then
+        -- Matcha Style (Non-linear Smoothing)
+    local fwd = camera.CFrame.LookVector
+        local dot = fwd:Dot(targetCF.LookVector)
+        local angularDiff = math.acos(math.clamp(dot, -1, 1))
+        local matchaAlpha = math.clamp(angularDiff / 0.45, 0.1, 1.0) / (smooth * 0.75)
+        camera.CFrame = camera.CFrame:Lerp(targetCF, matchaAlpha)
+    elseif isMobileLock then
+        --[[ MOBILE LOCK (Delta / Ronix compatible) ]]
+        -- Direct CFrame manipulation via Scriptable camera type.
+        -- This is the ONLY method that reliably works on mobile executors.
+        -- The movement thumbstick (Humanoid locomotion) is driven by touch input
+        -- on the LEFT side of the screen and is completely unaffected by CameraType.
+        -- The camera touch area (right side) is superseded by our CFrame assignment,
+        -- which is exactly what we want for aimbot.
+        cam.CameraType = Enum.CameraType.Scriptable
+        local fwd = camera.CFrame.LookVector
+        local dot = math.clamp(fwd:Dot(targetCF.LookVector), -1, 1)
+        local angErr = math.acos(dot)
+        -- More aggressive smoothing on mobile (fewer FPS headroom, larger finger latency)
+        local baseAlpha = 1 / math.max(smooth * 1.5, 1)
+        local dynamicBoost = math.clamp(angErr / math.rad(25), 0, 2.0)
+        local lerpAlpha = math.clamp(baseAlpha * (1 + dynamicBoost), 0.06, 1.0)
+        camera.CFrame = camera.CFrame:Lerp(targetCF, lerpAlpha)
+    end
+end
+
+
+-- Hit Notification Logic (Stylized Damage Numbers)
+-- ification (Drawing API - Robust & High Performance)
+-- Hit Notification relocated.
+
+-- ific Hook)
+
+
+
+
+-- Hit Notification ( Hook-based )
+
+
+
+function stopAim()
+    local cm = workspace.CurrentCamera
+    if cm and cm.CameraType == Enum.CameraType.Scriptable then
+        cm.CameraType = Enum.CameraType.Custom
+    end
+    local myHum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+    if myHum then 
+--         if Anti-Aim is disabled
+    if not config["Enable AntiAim"] then
+            pcall(function() myHum.AutoRotate = true end) 
+        end
+    end
+end
+
+-- Toggle aimbot with key
+table.insert(connections, UIS.InputBegan:Connect(function(input, gp)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Gamepad1 then
+        _lastFired = os.clock()
+    end
+    if _G.Unloaded then return end
+    if gp then return end
+    if config["Aimbot Mode"] == "Toggle" then
+        local key = config["Aimbot Key"]
+        if key and typeof(key) == "EnumItem" then
+            if (key.EnumType == Enum.KeyCode and input.KeyCode == key) or
+               (key.EnumType == Enum.UserInputType and input.UserInputType == key) then
+                aimbotEnabled = not aimbotEnabled
+                if not aimbotEnabled then stopAim() end
+            end
+        end
+    end
+end))
+table.insert(connections, UIS.InputEnded:Connect(function(input)
+    if config["Aimbot Mode"] == "Hold" then
+        local key = config["Aimbot Key"]
+        if key and typeof(key) == "EnumItem" then
+            if (key.EnumType == Enum.UserInputType and input.UserInputType == key) or
+               (key.EnumType == Enum.KeyCode and input.KeyCode == key) then
+                stopAim()
+            end
+        end
+    end
+end))
+
+-- for Yub-X)
+RunService:BindToRenderStep("KrazzAimbot", Enum.RenderPriority.Camera.Value + 1, function()
+    if _G.Unloaded then 
+        pcall(function() RunService:UnbindFromRenderStep("KrazzAimbot") end)
+        return 
+    end
+    if not config["Enable Aimbot"] then
+        if _aimActive then _aimActive = false; stopAim() end
+        return
+    end
+    if Main and Main.Visible then
+        if _aimActive then _aimActive = false; stopAim() end
+        return
+    end
+
+    local isKeyDown = false
+    if config["Aimbot Mode"] == "Hold" then
+        isKeyDown = getAimbotKeyDown()
+    elseif config["Aimbot Mode"] == "Toggle" then
+        isKeyDown = aimbotEnabled
+    else
+        isKeyDown = true
+    end
+
+    if isKeyDown then
+        _aimActive = true
+        local target = state.getClosestPlayer()
+        if target then
+            aimAtTarget(target)
+        else
+            _aimActive = false
+            stopAim()
+        end
+    else
+        if _aimActive then 
+            _aimActive = false 
+            stopAim()
+        end
+    end
+end)
+
+
+-- ESP System
+-- espObjects already declared at top
+function createESP(p)
+    if espObjects[p] then return end
+    local container = Instance.new("Frame", gui); container.Name = "ESP_" .. p.Name; container.BackgroundTransparency = 1; container.Size = UDim2.new(1,0,1,0); container.Visible = false
+    
+    local box = Instance.new("Frame", container); box.BackgroundTransparency = 1; box.BorderSizePixel = 0; box.Visible = false
+    local stroke = Instance.new("UIStroke", box); stroke.Thickness = 1.5; stroke.Color = Color3.fromRGB(255, 255, 255); stroke.Enabled = true    local outline = Instance.new("UIStroke", box); outline.Thickness = 3; outline.Color = Color3.new(0,0,0); outline.Transparency = 0.5; outline.Enabled = true
+    
+    local filledBox = Instance.new("Frame", box); filledBox.Size = UDim2.new(1, 0, 1, 0); filledBox.BackgroundColor3 = Color3.new(1, 1, 1); filledBox.BackgroundTransparency = 0.8; filledBox.BorderSizePixel = 0; filledBox.Visible = false
+    
+    local hDot = Instance.new("Frame", container); hDot.Size = UDim2.new(0, 6, 0, 6); hDot.AnchorPoint = Vector2.new(0.5, 0.5); hDot.BackgroundTransparency = 1; hDot.Visible = false; local hc = Instance.new("UICorner", hDot); hc.CornerRadius = UDim.new(1, 0)
+    local hDotOutline = Instance.new("UIStroke", hDot); hDotOutline.Color = Color3.fromRGB(230, 70, 70); hDotOutline.Thickness = 1.5; hDotOutline.Enabled = true
+    
+    local corners = {}; for i=1, 8 do 
+        local l = Instance.new("Frame", container); l.BackgroundColor3 = Color3.fromRGB(230, 70, 70); l.BorderSizePixel = 0; l.Visible = false; 
+        local s = Instance.new("UIStroke", l); s.Color = Color3.fromRGB(0, 0, 0); s.Thickness = 1.2; s.Enabled = true; corners[i] = {line = l, stroke = s} 
+    end
+    
+    local bones = {}; for i=1, 18 do 
+        local l = Instance.new("Frame", container); l.BackgroundColor3 = Color3.fromRGB(255, 255, 255); l.BorderSizePixel = 0; l.Visible = false; l.AnchorPoint = Vector2.new(0.5, 0.5)
+        local s = Instance.new("UIStroke", l); s.Color = Color3.fromRGB(0, 0, 0); s.Thickness = 1.0; s.Enabled = true; bones[i] = {line = l, stroke = s} 
+    end
+    
+    local hbg = Instance.new("Frame", container); hbg.BackgroundColor3 = Color3.fromRGB(0, 0, 0); hbg.BackgroundTransparency = 0.3; hbg.Visible = false; hbg.BorderSizePixel = 0
+    local hfill = Instance.new("Frame", hbg); hfill.Size = UDim2.new(1, 0, 1, 0); hfill.BackgroundColor3 = Color3.fromRGB(0, 255, 0); hfill.BorderSizePixel = 0
+    local hs = Instance.new("UIStroke", hbg); hs.Thickness = 1.2; hs.Color = Color3.new(0,0,0); hs.Enabled = true
+    
+    local ntag = Instance.new("TextLabel", container); ntag.BackgroundTransparency = 1; ntag.TextColor3 = Color3.fromRGB(255, 255, 255); ntag.Font = Enum.Font.GothamBold; ntag.TextSize = state.isMobile and 7 or 13; ntag.Visible = false; ntag.TextStrokeTransparency = 0.2
+    local distTag = Instance.new("TextLabel", container); distTag.BackgroundTransparency = 1; distTag.TextColor3 = Color3.fromRGB(200, 200, 200); distTag.Font = Enum.Font.GothamBold; distTag.TextSize = state.isMobile and 6 or 11; distTag.Visible = false; distTag.TextStrokeTransparency = 0.2
+    local wtag = Instance.new("TextLabel", container); wtag.BackgroundTransparency = 1; wtag.TextColor3 = Color3.fromRGB(255, 255, 255); wtag.Font = Enum.Font.GothamBold; wtag.TextSize = state.isMobile and 6 or 11; wtag.Visible = false; wtag.TextStrokeTransparency = 0.2
+    
+    local wIcon = Instance.new("ImageLabel", container); wIcon.BackgroundTransparency = 1; wIcon.Size = UDim2.new(0, 18, 0, 18); wIcon.Visible = false; wIcon.ZIndex = 2
+    local tFrame = Instance.new("Frame", container); tFrame.BackgroundColor3 = Color3.fromRGB(160, 32, 240); tFrame.BorderSizePixel = 0; tFrame.Visible = false; tFrame.AnchorPoint = Vector2.new(0.5, 0.5); tFrame.ZIndex = 1
+    local tStroke = Instance.new("UIStroke", tFrame); tStroke.Thickness = 1.0; tStroke.Color = Color3.new(0,0,0); tStroke.Enabled = true
+    
+    local highlight = Instance.new("Highlight", container); highlight.Name = "Charm"; highlight.Enabled = false; highlight.OutlineTransparency = 0.1; highlight.FillTransparency = 0.45; highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    
+    espObjects[p] = {container = container, box = box, filledBox = filledBox, stroke = stroke, outline = outline, hDot = hDot, hDotOutline = hDotOutline, corners = corners, bones = bones, healthBg = hbg, healthFill = hfill, healthStroke = hs, nameTag = ntag, distTag = distTag, weaponTag = wtag, weaponIcon = wIcon, highlight = highlight, tracer = {line = tFrame, stroke = tStroke}, chinaHat = nil, originalProps = {}}
+end
+
+local function updateCorners(data, pos, size, outlineEnabled)
+    local x, y, w, h = pos.X, pos.Y, size.X, size.Y; local l = math.clamp(w / 4, 3, 20)
+    local ps = {{Vector2.new(x-w/2, y-h/2), Vector2.new(l, 2)}, {Vector2.new(x-w/2, y-h/2), Vector2.new(2, l)}, {Vector2.new(x+w/2-l, y-h/2), Vector2.new(l, 2)}, {Vector2.new(x+w/2, y-h/2), Vector2.new(2, l)}, {Vector2.new(x-w/2, y+h/2), Vector2.new(l, 2)}, {Vector2.new(x-w/2, y+h/2-l), Vector2.new(2, l)}, {Vector2.new(x+w/2-l, y+h/2), Vector2.new(l, 2)}, {Vector2.new(x+w/2, y+h/2-l), Vector2.new(2, l)}}
+    for i, p in ipairs(ps) do data.corners[i].line.Position = UDim2.new(0, p[1].X, 0, p[1].Y); data.corners[i].line.Size = UDim2.new(0, p[2].X, 0, p[2].Y); data.corners[i].line.Visible = true; data.corners[i].stroke.Enabled = outlineEnabled end
+end
+
+local function drawLine(data, p1, p2, outlineEnabled)
+    local line = data.line; local midpoint = (p1 + p2) / 2; local dist = (p1 - p2).Magnitude; local angle = math.deg(math.atan2(p2.Y - p1.Y, p2.X - p1.X))
+    line.Size = UDim2.new(0, dist, 0, 1.5); line.Position = UDim2.new(0, midpoint.X, 0, midpoint.Y); line.Rotation = angle; line.Visible = true; data.stroke.Enabled = outlineEnabled
+end
+
+-- ified
+-- R15 bone names match Roblox's default R15 rig exactly
+local skeletonConnections = {
+    R15 = {
+        -- Spine
+        {"LowerTorso", "WaistRigAttachment", "UpperTorso", "NeckRigAttachment"},
+        -- Collarbones/Shoulders
+        {"UpperTorso", "NeckRigAttachment", "UpperTorso", "LeftShoulderRigAttachment"},
+        {"UpperTorso", "NeckRigAttachment", "UpperTorso", "RightShoulderRigAttachment"},
+        -- Left Arm
+        {"LeftUpperArm", "LeftShoulderRigAttachment", "LeftUpperArm", "LeftElbowRigAttachment"},
+        {"LeftLowerArm", "LeftElbowRigAttachment", "LeftLowerArm", "LeftWristRigAttachment"},
+        -- Right Arm
+        {"RightUpperArm", "RightShoulderRigAttachment", "RightUpperArm", "RightElbowRigAttachment"},
+        {"RightLowerArm", "RightElbowRigAttachment", "RightLowerArm", "RightWristRigAttachment"},
+        -- Hips
+        {"LowerTorso", "WaistRigAttachment", "LowerTorso", "LeftHipRigAttachment"},
+        {"LowerTorso", "WaistRigAttachment", "LowerTorso", "RightHipRigAttachment"},
+        -- Left Leg
+        {"LeftUpperLeg", "LeftHipRigAttachment", "LeftUpperLeg", "LeftKneeRigAttachment"},
+        {"LeftLowerLeg", "LeftKneeRigAttachment", "LeftLowerLeg", "LeftAnkleRigAttachment"},
+        -- Right Leg
+        {"RightUpperLeg", "RightHipRigAttachment", "RightUpperLeg", "RightKneeRigAttachment"},
+        {"RightLowerLeg", "RightKneeRigAttachment", "RightLowerLeg", "RightAnkleRigAttachment"},
+    },
+    R6 = {
+        {"Head",     "Torso"},
+        {"Torso",    "Left Arm"},
+        {"Torso",    "Right Arm"},
+        {"Torso",    "Left Leg"},
+        {"Torso",    "Right Leg"},
+    }
+}
+
+
+local function getBoundingBox(char)
+    local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+    for _, part in ipairs(char:GetChildren()) do
+        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+            local size = part.Size / 2
+            local corners = {Vector3.new(size.X, size.Y, size.Z), Vector3.new(-size.X, size.Y, size.Z), Vector3.new(size.X, -size.Y, size.Z), Vector3.new(size.X, size.Y, -size.Z), Vector3.new(-size.X, -size.Y, size.Z), Vector3.new(-size.X, size.Y, -size.Z), Vector3.new(size.X, -size.Y, -size.Z), Vector3.new(-size.X, -size.Y, -size.Z)}
+            local cam = workspace.CurrentCamera
+            for _, corner in ipairs(corners) do
+                local v, onS = cam:WorldToViewportPoint(part.CFrame * corner)
+                if onS then
+                    minX = math.min(minX, v.X); maxX = math.max(maxX, v.X); minY = math.min(minY, v.Y); maxY = math.max(maxY, v.Y)
+                end
+            end
+        end
+    end
+    return Vector2.new(minX, minY), Vector2.new(maxX, maxY)
+end
+
+---- TRIGGERBOT V3 (หัวตรง ไม่ค้าง ขยับได้) ----
+-- [FIXED] ไม่ใช้ VIM, ไม่เลื่อนกล้อง, ใช้ Tool.Activated, เดินได้ --
+
+local _tb_lastFire = 0
+local _tb_toolCache = nil
+local _tb_lastToolCheck = 0
+
+local function getCurrentWeapon()
+    local now = os.clock()
+    if now - _tb_lastToolCheck < 0.1 and _tb_toolCache then
+        return _tb_toolCache
+    end
+    _tb_lastToolCheck = now
+    local char = player.Character
+    if not char then return nil end
+    local tool = char:FindFirstChildOfClass("Tool")
+    if tool then _tb_toolCache = tool; return tool end
+    local backpack = player:FindFirstChild("Backpack")
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                local name = item.Name:lower()
+                if name:find("gun") or name:find("revolver") or name:find("pistol") 
+                   or name:find("rifle") or name:find("sniper") or name:find("knife")
+                   or name:find("blade") or name:find("sword") then
+                    _tb_toolCache = item
+                    return item
+                end
+            end
+        end
+    end
+    _tb_toolCache = nil
+    return nil
+end
+
+local function fireWeapon(tool)
+    if not tool then return false end
+    local activated = tool:FindFirstChild("Activated")
+    if activated and activated:IsA("BindableEvent") then
+        activated:Fire()
+        return true
+    end
+    for _, child in ipairs(tool:GetDescendants()) do
+        if child:IsA("RemoteEvent") then
+            pcall(function() child:FireServer() end)
+            return true
+        end
+        if child:IsA("RemoteFunction") then
+            pcall(function() child:InvokeServer() end)
+            return true
+        end
+    end
+    if not state.isMobile and mouse1click then
+        pcall(mouse1click)
+        return true
+    end
+    return false
+end
+
+local function getTargetFromCrosshair()
+    local cam = workspace.CurrentCamera
+    if not cam then return nil, nil end
+    local vs = cam.ViewportSize
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = {player.Character}
+    local centerRay = cam:ViewportPointToRay(vs.X / 2, vs.Y / 2)
+    local result = workspace:Raycast(centerRay.Origin, centerRay.Direction * 1500, rayParams)
+    if result then
+        local hitInst = result.Instance
+        local tChar = hitInst.Parent
+        if tChar and not tChar:IsA("Model") then tChar = tChar.Parent end
+        local tPlayer = tChar and Players:GetPlayerFromCharacter(tChar)
+        if tPlayer and tPlayer ~= player then
+            return hitInst, tPlayer
+        end
+    end
+    return nil, nil
+end
+
+local function getTargetFromAimbot()
+    if _G.KrazzAimbotTarget and _G.KrazzAimbotTarget.Parent then
+        local part = _G.KrazzAimbotTarget
+        local cam = workspace.CurrentCamera
+        local _, onScreen = cam:WorldToViewportPoint(part.Position)
+        if onScreen then
+            local tPlayer = Players:GetPlayerFromCharacter(part.Parent)
+            return part, tPlayer
+        end
+    end
+    return nil, nil
+end
+
+task.spawn(function()
+    local lastTriggerFire = 0
+    while task.wait(0.01) do
+        pcall(function()
+            if _G.Unloaded then return end
+            if not config["Enable Triggerbot"] or not player.Character or (_G._krazzMenuOpen) then return end
+            local tool = getCurrentWeapon()
+            if not tool then return end
+            local targetPart, targetPlayer = getTargetFromAimbot()
+            if not targetPart then
+                targetPart, targetPlayer = getTargetFromCrosshair()
+            end
+            if not targetPart or not targetPlayer then return end
+            local tChar = targetPlayer.Character
+            if not tChar then return end
+            local hum = tChar:FindFirstChildOfClass("Humanoid")
+            local hasFF = tChar:FindFirstChildOfClass("ForceField")
+            if not (hum and hum.Health > 0 and not hasFF) then return end
+            if config["Trigger Team Check"] and isFriendly(targetPlayer) then return end
+            local delay = math.max((config["Click Delay"] or 1) / 100, 0.01)
+            local now = os.clock()
+            if now - lastTriggerFire < delay then return end
+            local fired = fireWeapon(tool)
+            if fired then
+                lastTriggerFire = os.clock()
+                getgenv()._KrazzWeaponFiredAt = os.clock()
+                getgenv()._KrazzLastShotAny = os.clock()
+                getgenv()._KrazzPriorityTarget = targetPlayer
+                getgenv()._KrazzTargetLock = targetPlayer
+                getgenv()._localHitRegister[targetPlayer] = os.clock()
+            end
+        end)
+    end
+end)
+
+-- Movement & Clipping Logic
+--[[ SPEED STRAFE: Anti-Cheat Safe CFrame Displacement ONLY ]]
+-- ified    EAvS2 actively hooks property changes.
+-- We displace via CFrame which is purely client-side and not replicated as a speed value.
+table.insert(connections, RunService.PreRender:Connect(function(deltaTime)
+    if _G.Unloaded then return end
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+    if root and hum and hum.Health > 0 then
+        -- Teleport Guard
+    local lastPos = _G.KrazzLastPos or root.Position
+        if (root.Position - lastPos).Magnitude > 50 then
+            _G.KrazzTeleporting = os.clock()
+        end
+        _G.KrazzLastPos = root.Position
+
+        local isTeleporting = _G.KrazzTeleporting and (os.clock() - _G.KrazzTeleporting < 0.5)
+        local moveDir = hum.MoveDirection
+
+        if config["Speed Strafe"] and moveDir.Magnitude > 0 and not isTeleporting then
+            -- FORCE WalkSpeed = 16 ONLY when using Speed Strafe
+            -- This prevents breaking native mobile thumbstick physics in normal gameplay
+            pcall(function()
+                if hum.WalkSpeed ~= 16 then hum.WalkSpeed = 16 end
+            end)
+            local desiredSpeed = math.clamp(config["WalkSpeed Boost"] or 20, 17, state.isMobile and 48 or 100)
+            local extra = desiredSpeed - 16
+            if extra > 0 then
+                -- CFrame push: adds per-frame displacement along input direction
+                -- Uses a humanized jitter to avoid constant-velocity AC patterns
+    local jitter = 1 + (math.random(-8, 8) / 100) --   8% variance per frame
+    local pushDir = Vector3.new(moveDir.X, 0, moveDir.Z)
+                if pushDir.Magnitude > 0 then
+                    pushDir = pushDir.Unit
+                    root.CFrame = root.CFrame + (pushDir * (extra * deltaTime * jitter))
+                end
+            end
+        end
+
+        if config["Toggle Spin"] then
+            root.CFrame = CFrame.new(root.Position) * root.CFrame.Rotation
+        end
+    end
+end))
+
+
+
+-- Noclip Logic
+table.insert(connections, RunService.Stepped:Connect(function()
+    if not _G.Unloaded and config["Enable Noclip"] then
+        local char = player.Character
+        if char and char:IsDescendantOf(workspace) then
+            for _, v in ipairs(char:GetDescendants()) do
+                if v:IsA("BasePart") and v.CanCollide then
+                    v.CanCollide = false
+                end
+            end
+        end
+    end
+end))
+
+-- Infinity Jump Logic
+table.insert(connections, UIS.JumpRequest:Connect(function()
+    if not _G.Unloaded and config["Infinity Jump"] then
+        local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum:ChangeState("Jumping")
+        end
+    end
+end))
+
+-- Anti-Aim Logic (Standard)
+table.insert(connections, RunService.RenderStepped:Connect(function()
+    if _G.Unloaded then return end
+    local char = player.Character; local root = char and char:FindFirstChild("HumanoidRootPart"); local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if char and root and hum and hum.Health > 0 then
+        hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+        
+        if config["Enable AntiAim"] then
+            -- Advanced Server Desync (Velocity Distortion Bypass)
+    if config["Enable Desync"] then
+                local dRange = (config["Desync Range"] or 15) * 10
+                local oldV = root.Velocity
+                task.spawn(function()
+                    root.Velocity = oldV + Vector3.new(math.random(-dRange, dRange), 0, math.random(-dRange, dRange))
+                    RunService.Heartbeat:Wait()
+                    if root and root.Parent then root.Velocity = oldV end
+                end)
+            end
+            
+            local neck = char:FindFirstChild("Neck", true) or char:FindFirstChild("Neck Joint", true) or (char:FindFirstChild("Head") and char.Head:FindFirstChildOfClass("Motor6D"))
+            local leftS = char:FindFirstChild("LeftShoulder", true) or char:FindFirstChild("Left Shoulder", true) or char:FindFirstChild("Left Arm", true)
+            local rightS = char:FindFirstChild("RightShoulder", true) or char:FindFirstChild("Right Shoulder", true) or char:FindFirstChild("Right Arm", true)
+            local waist = char:FindFirstChild("Waist", true) or char:FindFirstChild("RootJoint", true) or char:FindFirstChild("Torso", true)
+            
+            --[[ RIG TYPE DETECTION ]]
+    local rigParts = getRigParts(char)
+            local isR6 = rigParts and rigParts.Type == Enum.HumanoidRigType.R6
+
+            if neck and not originalC0s[neck] then originalC0s[neck] = neck.C0 end; 
+            if leftS and not originalC0s[leftS] then originalC0s[leftS] = (leftS:IsA("Motor6D") and leftS.C0 or originalC0s[leftS]) end; 
+            if rightS and not originalC0s[rightS] then originalC0s[rightS] = (rightS:IsA("Motor6D") and rightS.C0 or originalC0s[rightS]) end
+            if waist and not originalC0s[waist] then originalC0s[waist] = waist.C0 end
+            
+            local targetPitch, shouldElevateArms, shouldPitchDownArms = 0, false, false
+            if config["Pitch"] == "Up" then targetPitch = 90; shouldElevateArms = true 
+            elseif config["Pitch"] == "Down" then targetPitch = -90; shouldPitchDownArms = true 
+            elseif config["Pitch"] == "Random" then 
+                if os.clock() - lastRandomPitchUpdate > (1 / math.max(config["Random Pitch Speed"], 1)) then
+                    currentRandomPitch = (math.random() > 0.5) and 90 or -90
+                    lastRandomPitchUpdate = os.clock()
+                end
+                targetPitch = currentRandomPitch; 
+                if targetPitch > 30 then shouldElevateArms = true end 
+            elseif config["Pitch"] == "Custom" then
+                targetPitch = config["Custom Pitch"] or 0
+                if targetPitch > 30 then shouldElevateArms = true elseif targetPitch < -30 then shouldPitchDownArms = true end
+            end
+            
+            --[[ UNIQUE COMBAT GATING ]]
+    local isHitRecent = (os.clock() - (getgenv().KrazzHit or 0) < 2.0)
+            local isKillRecent = (os.clock() - (getgenv().KrazzKill or 0) < 2.2)
+            local isRevolverFiring = (os.clock() - (getgenv().KrazzRevolverFiring or 0) < 0.25)
+            local isActionRecent = isHitRecent or isKillRecent or isRevolverFiring
+            
+            --[[ ROBUST AIM KEY CHECK ]]
+    local aimK = config["Aimbot Key"]
+            local sAimK = config["SilentAimKey"]
+            local isAimKeyDown = false
+            pcall(function()
+                if aimK then
+                    if aimK.EnumType == Enum.KeyCode then isAimKeyDown = isAimKeyDown or UIS:IsKeyDown(aimK)
+                    elseif aimK.EnumType == Enum.UserInputType then isAimKeyDown = isAimKeyDown or UIS:IsMouseButtonPressed(aimK) end
+                end
+                if sAimK then
+                    if sAimK.EnumType == Enum.KeyCode then isAimKeyDown = isAimKeyDown or UIS:IsKeyDown(sAimK)
+                    elseif sAimK.EnumType == Enum.UserInputType then isAimKeyDown = isAimKeyDown or UIS:IsMouseButtonPressed(sAimK) end
+                end
+            end)
+            
+            local isAiming = isAimKeyDown or (config["Enable Aimbot"] and getAimbotKeyDown())
+
+            --[[ AT-DIRECTION PRIORITY DETECTION ]]
+    local atDirectionActive = false
+            local atDirYaw = 0
+            
+            --[[ SMART KILL SNAP: Target-Edge Auto-Switch (Priority Logic) ]]
+    local isKillOverride = (os.clock() - (getgenv().KrazzKill or 0) < 1.6)
+            local isAttackOverride = isRevolverFiring or isKillOverride
+            
+            -- Auto-determine best mode during kill window
+    local smartKillMode = config["At Direction Mode"]
+            if isKillOverride and not isRevolverFiring then
+                local bestD = 1000
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                        local d = (p.Character.HumanoidRootPart.Position - root.Position).Magnitude
+                        if d < bestD then bestD = d end
+                    end
+                end
+                smartKillMode = (bestD < 45) and "At Targets" or "At Edges"
+            end
+
+            -- ACTION OVERRIDE: At Direction snaps target/edge, Jitter+Pitch go to None
+    if config["At Direction"] and isAttackOverride and (not isAiming) and (char and root) then
+                if smartKillMode == "At Targets" or isRevolverFiring then
+                    local nearestRoot = nil
+
+                    local bestDist = math.huge
+                    for _, plr in ipairs(Players:GetPlayers()) do
+                        if plr ~= player then
+                            local ch = plr.Character
+                            local r = ch and ch:FindFirstChild("HumanoidRootPart")
+                            local hm = ch and ch:FindFirstChildOfClass("Humanoid")
+                            if r and hm and hm.Health > 0 then
+                                local d = (r.Position - root.Position).Magnitude
+                                if d < bestDist then
+                                    bestDist = d; nearestRoot = r
+                                end
+                            end
+                        end
+                    end
+                    if nearestRoot then
+                        local flat = Vector3.new(nearestRoot.Position.X, root.Position.Y, nearestRoot.Position.Z)
+                        if (flat - root.Position).Magnitude > 1e-3 then
+                            local _, y, _ = CFrame.lookAt(root.Position, flat):ToOrientation()
+                            atDirYaw = y; atDirectionActive = true
+                        end
+                    end
+                elseif smartKillMode == "At Edges" and not isRevolverFiring then 
+-- for active firing to ensure target focus
+-- for active firing to ensure target focus
+    local rayParams = RaycastParams.new(); rayParams.FilterType = Enum.RaycastFilterType.Exclude; rayParams.FilterDescendantsInstances = {char}
+                    local origin = root.Position + Vector3.new(0, 2, 0); local shortest = math.huge; local toWallFlat = nil
+                    for i = 0, 7 do
+                        local ang = (i / 8) * math.pi * 2; local dir = Vector3.new(math.sin(ang), 0, math.cos(ang))
+                        local res = workspace:Raycast(origin, dir * 2000, rayParams)
+                        if res then
+                            local hitDist = (res.Position - root.Position).Magnitude
+                            if hitDist < shortest then
+                                shortest = hitDist; toWallFlat = Vector3.new(res.Position.X, root.Position.Y, res.Position.Z)
+                            end
+                        end
+                    end
+                    if toWallFlat then
+                        local _, y, _ = CFrame.lookAt(root.Position, toWallFlat):ToOrientation()
+                        atDirYaw = y; atDirectionActive = true
+                    end
+                end
+            end
+
+            --[[ CS:GO FAKELAG 2.0: Desync/LBY Integration ]]
+    local isChoking = config["Fake Lag"] and (_G.KrazzFakeLagTicks and _G.KrazzFakeLagTicks < (config["Fake Lag ticks"] or 12))
+            
+            -- Apply Fake Yaw / Desync during choke phase
+    if isChoking and not isAttackOverride then
+                local fakeAngle = (config["Fake Yaw Offset"] or 90)
+                atDirYaw = atDirYaw + math.rad(fakeAngle)
+                atDirectionActive = true
+                -- Distort joints for visual desync
+    if neck then targetPitch = targetPitch + 15 end
+            end
+
+            -- inhibitAARots: suppress Jitter/Spin rotation during override or choke windows
+    local inhibitAARots = isAttackOverride or isChoking
+            --[[ AT-DIRECTION SNAP ENGINE: Kills, Weapon Fire, or LBY Choking ]]
+    if config["At Direction"] and (isAttackOverride or isChoking) then
+                local aaMode = smartKillMode
+                if isChoking and not isAttackOverride then 
+                    aaMode = "Choke"  -- for Fake Yaw during lag
+    end
+                
+                if aaMode == "At Targets" or aaMode == "Choke" then
+                    local target = nil
+                    if aaMode == "Choke" then
+--                         while choking
+    local _, y, _ = camera.CFrame:ToOrientation()
+                        root.CFrame = CFrame.new(root.Position) * CFrame.Angles(0, y + math.rad(config["Fake Yaw Offset"] or 90), 0)
+                    else
+                        -- Real Snap (Kills/Firing)
+                        target = _sa_target or getgenv()._KrazzPriorityTarget or getgenv()._KrazzTargetLock
+                        if not target then
+                            -- Fallback: find nearest player
+    local nearest = nil; local bDist = math.huge
+                            for _, p in ipairs(Players:GetPlayers()) do
+                                if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                                    local d = (p.Character.HumanoidRootPart.Position - root.Position).Magnitude
+                                    if d < bDist then bDist = d; nearest = p.Character.HumanoidRootPart end
+                                end
+                            end
+                            target = nearest
+                        end
+                        if target then
+                            local lookPos = target:IsA("BasePart") and target.Position or (target:IsA("Model") and target:GetPivot().Position or target.Position)
+                            root.CFrame = CFrame.lookAt(root.Position, Vector3.new(lookPos.X, root.Position.Y, lookPos.Z))
+                        end
+                    end
+                elseif aaMode == "At Edges" then
+                    local rayP = RaycastParams.new(); rayP.FilterType = Enum.RaycastFilterType.Exclude; rayP.FilterDescendantsInstances = {char}
+                    local origin = root.Position + Vector3.new(0, 2, 0); local shortest = math.huge; local toWall = nil
+                    for i = 0, 7 do
+                        local ang2 = (i / 8) * math.pi * 2; local dir = Vector3.new(math.sin(ang2), 0, math.cos(ang2))
+                        local res = workspace:Raycast(origin, dir * 2000, rayP)
+                        if res then
+                            local hd = (res.Position - root.Position).Magnitude
+                            if hd < shortest then shortest = hd; toWall = Vector3.new(res.Position.X, root.Position.Y, res.Position.Z) end
+                        end
+                    end
+                    if toWall then root.CFrame = CFrame.lookAt(root.Position, toWall) end
+                end
+            end
+
+--             for frontal alignment
+    if isAttackOverride then
+                targetPitch = 0
+                shouldElevateArms = false; shouldPitchDownArms = false
+            end
+            -- NOTE: once isKillOverride=false, config["Pitch"] and config["Yaw"] resume normally below
+
+            
+--             forces static angles even during AA inhibition ]]
+    if config["Pitch"] ~= "None" and neck then 
+                -- Static Pitch stays ACTIVE even during Choke/Attack windows (Override inhibition)
+                neck.C0 = originalC0s[neck] * CFrame.Angles(math.rad(targetPitch), 0, 0); 
+                
+--                 Forward on Pitch Down)
+    if waist then
+                    if targetPitch < -30 then
+                        local tMult = math.clamp(math.abs(targetPitch/90), 0.1, 1)
+                        waist.C0 = originalC0s[waist] * CFrame.Angles(math.rad(targetPitch * 0.35 * tMult), math.rad(5 * tMult), math.rad(3 * tMult))
+                    else
+                        waist.C0 = originalC0s[waist]
+                    end
+                end
+
+                if shouldElevateArms and leftS and rightS then 
+                    if hum.RigType == Enum.HumanoidRigType.R6 then 
+                        leftS.C0 = originalC0s[leftS] * CFrame.Angles(0, 0, math.rad(-110)); 
+                        rightS.C0 = originalC0s[rightS] * CFrame.Angles(0, 0, math.rad(110)) 
+                    else 
+                        leftS.C0 = originalC0s[leftS] * CFrame.Angles(math.rad(110), 0, math.rad(-40)); 
+                        rightS.C0 = originalC0s[rightS] * CFrame.Angles(math.rad(110), 0, math.rad(40)) 
+                    end 
+                elseif shouldPitchDownArms and leftS and rightS then
+                    local headDownBlend = math.clamp(math.abs(targetPitch) / 90, 0, 1)
+                    local lDelta = shoulderPitchDownDelta(hum.RigType, false, headDownBlend)
+                    local rDelta = shoulderPitchDownDelta(hum.RigType, true, headDownBlend)
+                    leftS.C0 = lerpShoulderWithDelta(originalC0s[leftS], lDelta, ARM_DOWN_BLEND)
+                    rightS.C0 = lerpShoulderWithDelta(originalC0s[rightS], rDelta, ARM_DOWN_BLEND)
+                else 
+                    if leftS then leftS.C0 = originalC0s[leftS] end; if rightS then rightS.C0 = originalC0s[rightS] end 
+                end 
+            elseif neck then 
+                neck.C0 = originalC0s[neck]; if leftS then leftS.C0 = originalC0s[leftS] end; if rightS then rightS.C0 = originalC0s[rightS] end; if waist then waist.C0 = originalC0s[waist] end 
+            end
+            
+            local cam = workspace.CurrentCamera
+            local _, cameraY, _ = cam.CFrame:ToOrientation()
+            local baseYaw = cameraY
+            local useCustomYaw = false
+            
+            if atDirectionActive then
+                baseYaw = atDirYaw
+                useCustomYaw = true
+            end
+            
+            if not inhibitAARots then
+                if config["Yaw Angle"] == "Backward" then
+                    baseYaw = baseYaw + math.pi
+                    useCustomYaw = true
+                elseif config["Yaw Angle"] == "off" then
+--                     force orientation management
+                    useCustomYaw = true
+                end
+            end
+            local extraYaw = 0
+            
+            --[[ FAKE LAG JITTER: when Fake Lag is active, make Jitter look lagged ]]
+    local maxTicks = config["Fake Lag ticks"] or 12
+            local fakeLagJitterFreeze = config["Fake Lag"] and (_G.KrazzFakeLagTicks and _G.KrazzFakeLagTicks < maxTicks)
+            
+--             for 1.5s
+    if not isKillOverride and not isActionRecent and not inhibitAARots then
+
+                -- Regular AntiAim Yaw rotations (Spin/Jitter/None)
+    if config["Yaw"] == "Spin" then
+                    if not fakeLagJitterFreeze then
+                        spinAngle = (spinAngle + (config["Spin Speed"] / 10)) % 360
+                    end
+                    extraYaw = math.rad(spinAngle)
+                    useCustomYaw = true
+                elseif config["Yaw"] == "Jitter" then
+                    local jitterMode = config["Jitter Mode"] or "Random"
+                    if jitterMode == "90" then
+                        currentJitterAngle = (math.floor(os.clock() * 20) % 2 == 0) and 90 or -90
+                    else
+--                         for speed sync
+                        getgenv()._KrazzLastJitterUpd = getgenv()._KrazzLastJitterUpd or 0
+                        getgenv()._KrazzCurrentJitterA = getgenv()._KrazzCurrentJitterA or 0
+                        
+                        local jSpeed = math.max(config["Jitter Speed"] or 15, 1) * (config["Jitter Speed Multiplier"] or 1)
+                        if os.clock() - getgenv()._KrazzLastJitterUpd > (1 / jSpeed) then
+                            local range = (config["Jitter Range"] or 90)
+                            getgenv()._KrazzCurrentJitterA = math.random(-range, range)
+                            getgenv()._KrazzLastJitterUpd = os.clock()
+                        end
+                        currentJitterAngle = getgenv()._KrazzCurrentJitterA
+                    end
+                    extraYaw = math.rad(currentJitterAngle)
+                    useCustomYaw = true
+                end
+            end
+            local yVal = baseYaw + extraYaw + math.rad(config["Yaw Base Offset"] or 0)
+            if useCustomYaw then
+                local finalCF = CFrame.new(root.Position) * CFrame.Angles(0, yVal, 0)
+                root.CFrame = root.CFrame:Lerp(finalCF, 0.35)  -- for absolute combat sovereignty
+    else
+                if not isAiming and not config["Enable AntiAim"] then
+                    hum.AutoRotate = true
+                end
+            end
+        else 
+            if not isAiming and not config["Enable AntiAim"] then
+                hum.AutoRotate = true
+            end 
+            for joint, original in pairs(originalC0s) do if joint and joint.Parent then joint.C0 = original end end 
+        end
+
+        --[[ JITTER TRAIL: triggers on Jitter yaw OR FakeLag ]]
+    local jitterActive = config["Enable Jitter Trail"] and
+            (config["Enable AntiAim"] and config["Yaw"] == "Jitter") -- Jitter AntiAim is on
+    local fakeLagActive = config["Fake Lag"]
+        local trailShouldFire = (jitterActive or fakeLagActive) and config["Enable Jitter Trail"] and not isActionRecent and not inhibitAARots
+
+        --[[ JITTER TRAIL: Optimized Sequential Step Logic ]]
+    if trailShouldFire then
+            local pPos = char:GetPivot().Position
+            getgenv()._KrazzLastGhostPos = getgenv()._KrazzLastGhostPos or pPos
+            local distFromLast = (pPos - getgenv()._KrazzLastGhostPos).Magnitude
+            
+--             if moved > 3.5 studs or every 0.25s stationary
+            _G._KrazzLastGhostTime = _G._KrazzLastGhostTime or 0
+            if distFromLast > 3.5 or (os.clock() - _G._KrazzLastGhostTime > 0.25) then
+                _G._KrazzLastGhostTime = os.clock()
+                getgenv()._KrazzLastGhostPos = pPos
+                task.spawn(function()
+                    local jCol = config["Jitter Trail Color"]
+                    if typeof(jCol) ~= "Color3" then jCol = Color3.fromRGB(160, 80, 255) end
+                    local folder = camera:FindFirstChild(SECURE_ID) or Instance.new("Folder", camera)
+                    folder.Name = SECURE_ID
+                    if (pPos - camera.CFrame.Position).Magnitude < 4 then return end
+                    
+                    local ghostModel = Instance.new("Model", folder)
+                    ghostModel.Name = "KrazzTrailGhost"
+                    for _, v in ipairs(char:GetDescendants()) do
+                        if v:IsA("BasePart") and v.Name ~= "HumanoidRootPart" and v.Name ~= "Head" and v.Transparency < 0.95 then
+                            local ghost = v:Clone()
+                            for _, c in ipairs(ghost:GetChildren()) do
+                                if not c:IsA("DataModelMesh") and not c:IsA("SpecialMesh") and not c:IsA("CharacterMesh") then
+                                    pcall(function() c:Destroy() end)
+                                end
+                            end
+                            ghost.Parent = ghostModel
+                            ghost.CanCollide = false; ghost.Anchored = true; ghost.CastShadow = false
+                            local jMat = config["Jitter Trail Material"] or "ForceField"
+                            local _matEnum = Enum.Material.ForceField
+                            local _ghostTrans = 0.45
+                            local _lowMat = string.lower(jMat)
+                            
+                            if _lowMat == "solid" then _matEnum = Enum.Material.Plastic; _ghostTrans = 0
+                            elseif _lowMat == "glow" or _lowMat == "neon" then _matEnum = Enum.Material.Neon; _ghostTrans = 0.3
+                            elseif _lowMat == "glow outline" then _matEnum = Enum.Material.Neon; _ghostTrans = 0.8
+                            elseif _lowMat == "iridescent" or _lowMat == "glass" or _lowMat == "ice" then _matEnum = Enum.Material.Glass; _ghostTrans = 0.2
+                            else _matEnum = Enum.Material.ForceField; _ghostTrans = 0.45 end
+
+                            ghost.Material = _matEnum
+                            ghost.Color = jCol; ghost.Transparency = _ghostTrans
+                            pcall(function() ghost:SetAttribute("KrazzIgnore", true) end)
+                            pcall(function() ghost.LocalTransparencyModifier = 0 end)
+                            
+                            local tInfo = TweenInfo.new(0.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+                            TweenService:Create(ghost, tInfo, {Transparency = 1}):Play()
+                        end
+                    end
+                    game:GetService("Debris"):AddItem(ghostModel, 0.65)
+                end)
+            end
+        end
+
+        --[[ FAKE LAG: CS:GO Style (Tick/Limit) ]]
+        -- cl_interp / cl_laglimit style packet choking
+        if fakeLagActive and not state.isMobile then
+            local maxTicks = config["Fake Lag ticks"] or 12
+            local limit = config["Fake Lag limit"] or 14
+            
+            _G.KrazzFakeLagTicks = (_G.KrazzFakeLagTicks or 0) + 1
+            if _G.KrazzFakeLagTicks > limit then _G.KrazzFakeLagTicks = 0 end
+            
+            local freezePhase = (_G.KrazzFakeLagTicks < maxTicks)
+
+            --[[ CS:GO Style: save last position and replay it ]]
+            if not _G._krazzLagPosCache then _G._krazzLagPosCache = {} end
+            local lagCache = _G._krazzLagPosCache
+
+            -- On freeze phase: spawn ghost at CACHED (lagged) positions
+            if not freezePhase then
+--                 for next freeze phase)
+                for _, v in ipairs(char:GetDescendants()) do
+                    if v:IsA("BasePart") then
+                        lagCache[v] = v.CFrame
+                    end
+                end
+            else
+                -- Freeze phase: spawn ghost at SAVED (lagged) position
+                task.spawn(function()
+                    local dur = 0.6 -- Ghost timing guard
+                    local folder = workspace:FindFirstChild("KrazzVisuals") or Instance.new("Folder", workspace)
+                    folder.Name = "KrazzVisuals"
+                    local cam = workspace.CurrentCamera
+                    if (char:GetPivot().Position - camera.CFrame.Position).Magnitude < 4 then return end
+                    local deathModel = Instance.new("Model", folder)
+                    deathModel.Name = "KrazzLagGhost"
+                    for _, v in ipairs(char:GetDescendants()) do
+                        if v:IsA("BasePart") and v.Name ~= "HumanoidRootPart" and v.Transparency < 0.8 and lagCache[v] then
+                            local ghost = v:Clone()
+                            for _, c in ipairs(ghost:GetChildren()) do
+                                if not c:IsA("DataModelMesh") and not c:IsA("SpecialMesh") then
+                                    pcall(function() c:Destroy() end)
+                                end
+                            end
+                            ghost.Parent = deathModel
+                            ghost.Name = "KrazzLagPart"
+                            if ghost:IsA("MeshPart") then ghost.TextureID = "" end
+                            local sm = ghost:FindFirstChildOfClass("SpecialMesh"); if sm then sm.TextureId = "" end
+                            ghost.Anchored = true; ghost.CanCollide = false; ghost.CastShadow = false
+                            ghost.CFrame = lagCache[v] -- Use LAGGED position
+                            ghost.Material = v.Material; ghost.Color = v.Color
+                            ghost.Transparency = 0.2
+                            ghost.Name = "KrazzVisualGhost"
+                            pcall(function() ghost:SetAttribute("KrazzIgnore", true) end)
+                            -- CS:GO style: ghost stays solid then fades
+                            local tInfo = TweenInfo.new(dur * 0.8, Enum.EasingStyle.Quad)
+                            TweenService:Create(ghost, tInfo, {Transparency = 1}):Play()
+                            game:GetService("Debris"):AddItem(ghost, dur + 0.1)
+                        end
+                    end
+                end)
+            end
+
+--             local only, not replicated)
+            local headT = char:FindFirstChild("Head")
+            local inFirstPerson = headT and (workspace.CurrentCamera.CFrame.Position - headT.Position).Magnitude < 2
+            if not inFirstPerson then
+                for _, v in ipairs(char:GetDescendants()) do
+                    if v:IsA("BasePart") and v.Name ~= "HumanoidRootPart" then
+                        pcall(function() v.LocalTransparencyModifier = 0 end)  -- Self ALWAYS visible to self
+                    end
+                end
+            end
+
+--             for third-party ]]
+            if freezePhase and root then
+                pcall(function()
+                    local curV = root.AssemblyLinearVelocity
+                    local noiseVel = Vector3.new(
+                        math.random(-3, 3) * 0.1,
+                        curV.Y, -- PRESERVE JUMP VELOCITY (Critical Fix)
+                        math.random(-3, 3) * 0.1
+                    )
+                    root.AssemblyLinearVelocity = noiseVel
+                end)
+            end
+
+            -- NetworkIsSleeping logic: only freeze when grounded to prevent jump desync/jitter
+            local isAir = hum and hum:GetState() == Enum.HumanoidStateType.Freefall
+            local currentTarget = getSilentTarget()
+            local activeSleep = freezePhase and (not isAir) and (not isActionRecent)
+            
+            for _, v in ipairs(char:GetDescendants()) do
+                if v:IsA("BasePart") then
+                    pcall(function() sethiddenproperty(v, "NetworkIsSleeping", activeSleep) end)
+                end
+            end
+        else
+            -- Fake Lag OFF: restore everything
+            _G._krazzLagPosCache = {}
+            for _, v in ipairs(char:GetDescendants()) do
+                if v:IsA("BasePart") then
+                    pcall(function() sethiddenproperty(v, "NetworkIsSleeping", false) end)
+                end
+            end
+        end
+    end
+end))
+
+-- Menu Visual Preview Loop (Removed - handled by buildESPPreview's own connection)
+
+-- ifications (Server Desync Native)
+table.insert(connections, RunService.RenderStepped:Connect(function()
+    if _G.Unloaded then return end
+    local char = player.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        local hrp = char.HumanoidRootPart
+        if config["Enable Server Desync"] then
+            local rsRange = (config["Server Desync Range"] or 15) * 10
+            hrp.Velocity = Vector3.new(math.random(-rsRange, rsRange), math.random(-rsRange, rsRange), math.random(-rsRange, rsRange))
+        end
+    end
+end))
+
+-- Main Visuals & Aim Loop (Guarded)
+table.insert(connections, RunService.RenderStepped:Connect(function()
+    if _G.Unloaded then return end
+    local ok, err = pcall(function()
+        local cam = workspace.CurrentCamera
+        
+        --[[ E-LINEAR PULL AIMBOT (Final Perspective Fix) ]]
+        -- NOTE: On mobile this secondary aimbot loop is intentionally skipped.
+        -- The primary KrazzAimbot RenderStep (Camera.Value+1) handles all mobile aiming
+        -- via CFrame Scriptable mode. Running both would cause camera jitter.
+        if config["Enable Aimbot"] and getAimbotKeyDown() and not state.isMobile then
+            local target = getClosestPlayer()
+            if target and target.Parent then
+                local pPos = _sa_calcEPos(target)
+                local smoothness = math.max(config["Smoothing"] or 1, 0.1)
+                
+                -- Progressive Prediction
+                local prediction = target:IsA("Model") and target:GetPivot().Position or pPos
+                pcall(function() 
+                    if target.PrimaryPart then 
+                        prediction = target.PrimaryPart.Position + (target.PrimaryPart.Velocity * 0.1) 
+                    end 
+                end)
+
+--                 ifference
+                local lookVector = (prediction - camera.CFrame.Position).Unit
+                local targetRot = CFrame.lookAt(Vector3.zero, lookVector, camera.CFrame.UpVector).Rotation
+                local currentRot = camera.CFrame.Rotation
+                
+                -- Progressive Magnetism based on field of view
+                local dot = camera.CFrame.LookVector:Dot(lookVector)
+                local angleDiff = math.acos(math.clamp(dot, -1, 1))
+                local magnetism = math.clamp(1.5 - (angleDiff * 2), 0.5, 1.2)
+                
+                -- Calculate the Slerp Alpha
+                local alpha = (1 / (smoothness * 2.5)) * magnetism
+                
+                if smoothness > 1 then
+                    -- Smooth "E-Linear" Nudge: Merges user input with aim assistance
+                    local nextRotation = currentRot:Lerp(targetRot, alpha)
+                    camera.CFrame = CFrame.new(camera.CFrame.Position) * nextRotation
+                else
+                    -- Fast Lock (Lower Smoothing)
+                    camera.CFrame = CFrame.lookAt(camera.CFrame.Position, prediction, camera.CFrame.UpVector)
+                end
+            end
+        end
+
+    local viewportSize = cam.ViewportSize
+    
+    --[[ DYNAMIC PERSPECTIVE SYSTEM ]]
+    if config["Third Person"] then
+        -- Custom Offset Mode (Over-the-shoulder)
+        player.CameraMode = Enum.CameraMode.Classic
+        player.CameraMaxZoomDistance = 128 -- Allow scrolling even in TP mode
+        player.CameraMinZoomDistance = 0.5
+        camera.CFrame = camera.CFrame * CFrame.new(0, 2, config["Third Person Distance"] or 0)
+    else
+        -- STANDARD ROBLOX UNLOCKED: Allow normal scrolling in any game
+        player.CameraMode = Enum.CameraMode.Classic
+        player.CameraMaxZoomDistance = 128
+        player.CameraMinZoomDistance = 0.5
+    end
+
+    --[[ CONSOLIDATED FOV RENDERING ]]
+    local rawMousePos = getMousePos()
+    -- On mobile there is no stable mouse/cursor position.
+    -- Always draw FOV circle at the screen centre so it matches the actual targeting logic.
+    local mPos = state.isMobile and Vector2.new(viewportSize.X / 2, viewportSize.Y / 2) or rawMousePos
+    currentSilentTarget = getSilentTarget()
+    -- FOV circle is shown when Show FOV is enabled AND either aimbot or silent-aim is enabled.
+    -- On mobile the circle always appears at screen centre.
+    local showAimFOV    = config["Show FOV"]        and config["Enable Aimbot"]
+    local showSilentFOV = config["Show Silent FOV"] and config["Enable Silent Aim"]
+
+    if showAimFOV or showSilentFOV then
+        if state.FOVCircle then
+            state.FOVCircle.Visible   = true
+            state.FOVCircle.Position  = mPos
+            state.FOVCircle.Filled    = false
+            -- Thickness drives outline visibility; Transparency only affects fill.
+            state.FOVCircle.Thickness  = 1.5
+            state.FOVCircle.Transparency = 0  -- 0 = fully opaque outline
+            state.FOVCircle.Radius = showAimFOV and (config["Aimbot FOV"] or 150)
+                                               or  (config["Silent Aim FOV"] or 100)
+        end
+        state.FOVCircle.Color = showAimFOV
+            and (config["Aimbot FOV Color"]     or Color3.fromRGB(230, 70, 70))
+            or  (config["Silent Aim FOV Color"] or Color3.fromRGB(70, 70, 230))
+        
+        -- Fill logic
+    local fillEnabled = (showAimFOV and config["Filled FOV"]) or (showSilentFOV and config["Silent Filled FOV"])
+        state.FOVFill.Visible = fillEnabled
+        state.FOVFill.Position = mPos
+        state.FOVFill.Radius = state.FOVCircle.Radius
+        state.FOVFill.Color = state.FOVCircle.Color
+        state.FOVFill.Transparency = (showAimFOV and config["Filled FOV Transparency"]) or (showSilentFOV and config["Silent Filled FOV Transparency"]) or 0.5
+    else
+        if state.FOVCircle then state.FOVCircle.Visible = false end
+        if state.FOVFill then state.FOVFill.Visible = false end
+    end
+    -- Ensure secondary circles are always hidden to prevent double FOV
+    if state.SilentFOVCircle then state.SilentFOVCircle.Visible = false end
+    if state.SilentFOVFill then state.SilentFOVFill.Visible = false end
+    for _, p in ipairs(Players:GetPlayers()) do
+        local isSelf = (p == player)
+        local shouldSkip = false
+        -- Self ESP: skip self unless explicitly enabled
+    if isSelf and not config["Self ESP"] and (config["Self Charm Material"] == "Disable") then
+--             if it exists
+    if espObjects[p] then
+                local d = espObjects[p]
+                if d.container then d.container.Visible = false end
+                if d.highlight then d.highlight.Enabled = false end
+                if d.chinaHat then for _, pt in ipairs(d.chinaHat:GetChildren()) do pt.Transparency = 1 end end
+                if d.skeleton then for _, line in pairs(d.skeleton) do line.Visible = false end end
+            end
+            shouldSkip = true
+        end
+
+        if not shouldSkip then
+            if not espObjects[p] then createESP(p) end
+            local d, char = espObjects[p], p.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            local head = char and char:FindFirstChild("Head")
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local isVis = false
+            
+            if char and root and hum and hum.Health > 0 then
+                local isTm = isFriendly(p)
+                local espAllowed = config["Enable ESP"] and (isSelf or (not config["Team Check"] or not isTm))
+                local itemAllowed = espAllowed and (not isSelf or config["Self ESP"])
+                local pName = (config["Display Name"] and p.DisplayName or p.Name)
+
+                if isSelf and config["Enable Name Spoof"] then
+                    pName = config["Spoof Name"] or pName
+                end
+                
+                -- Stream Proof GUI Handling (Defensive)
+    if Main then 
+                    pcall(function() 
+                        Main.CaptureVisibility = config["Stream Proof"] and Enum.CaptureVisibility.Hidden or Enum.CaptureVisibility.All 
+                    end)
+                end
+                
+                -- China Hat: only show when character is alive
+    local charAlive = hum and hum.Health > 0
+                local showSelfHat = (not isSelf) or config["Self ESP"]
+                if config["China Hat"] and head and espAllowed and charAlive and showSelfHat then
+                    -- Anti-Ghost Cleanup
+    if head:FindFirstChild("KrazzHat") then pcall(function() head.KrazzHat:Destroy() end) end
+
+                    if not d.chinaHat or not d.chinaHat.Parent then d.chinaHat = createChinaHat() end
+
+                    -- Rainbow cycle
+                    _hatHue = (_hatHue + 0.004) % 1
+                    local rainbowCol = Color3.fromHSV(_hatHue, 1, 1)
+
+                    d.chinaHat.KrazzHat.Transparency = 0.05
+                    d.chinaHat.KrazzHat.Color = rainbowCol
+                    
+                    local pcf = head.CFrame * CFrame.new(0, 1.15, 0)
+                    d.chinaHat.KrazzHat.CFrame = pcf
+                else
+                    if d.chinaHat then
+                        for _, p in ipairs(d.chinaHat:GetChildren()) do p.Transparency = 1 end
+                    end
+                end
+
+                if viewportSize and viewportSize.X > 1 and viewportSize.Y > 1 and config["Enable ESP"] and espAllowed then
+                    local rootPos, rootOnScreen = cam:WorldToViewportPoint(root.Position)
+                    if rootOnScreen and rootPos.Z > 0 then
+                        local dist = math.floor((camera.CFrame.Position - root.Position).Magnitude)
+                        if dist <= (config["ESP Max Distance"] or math.huge) then
+                            local min, max = getBoundingBox(char)
+                            if min.X < max.X and min.Y < max.Y then
+                                local size = max - min; local pos = min + (size/2); local outL = config["Outlines"]
+                                local v = Vector2.new(pos.X, pos.Y); local w, h = size.X, size.Y
+                                
+                                local visible = isVisible(head or root, char)
+                                local boxColor = isTm and (config["Team Check"] and config["Team Box Color"]) or (config["Visible Check"] and (visible and Color3.new(0,1,0) or Color3.new(1,0,0)) or config["Enemy Box Color"])
+                                local nameC = isTm and config["Team Name Color"] or config["Enemy Name Color"]
+                                local hpC = isTm and config["Team Health Bar Color"] or config["Enemy Health Bar Color"]
+                                local distC = isTm and config["Team Distance Color"] or config["Enemy Distance Color"]
+                                local skelC = isTm and config["Team Skeleton Color"] or config["Enemy Skeleton Color"]
+                                
+                                d.stroke.Color = boxColor; d.hDotOutline.Color = boxColor
+                                for _, c in pairs(d.corners) do c.line.BackgroundColor3 = boxColor end
+                                d.healthFill.BackgroundColor3 = hpC; d.nameTag.TextColor3 = nameC; d.distTag.TextColor3 = distC
+                                
+                                d.box.Visible = itemAllowed and config["Enable box"] and (config["Box Type"] == "Full")
+                                if d.box.Visible then
+                                    d.box.Size = UDim2.new(0, w, 0, h)
+                                    d.box.Position = UDim2.new(0, v.X-w/2, 0, v.Y-h/2)
+                                    d.stroke.Enabled = outL; d.outline.Enabled = outL
+                                end
+                                -- Filled box: child of box frame, so position is relative
+                                d.filledBox.Visible = itemAllowed and config["Filled box"] == true
+                                if d.filledBox.Visible then
+                                    d.filledBox.Size = UDim2.new(1, 0, 1, 0)
+                                    d.filledBox.Position = UDim2.new(0, 0, 0, 0)
+                                    d.filledBox.BackgroundColor3 = boxColor
+                                    d.filledBox.BackgroundTransparency = 0.7
+                                end
+                                if itemAllowed and config["Enable box"] and (config["Box Type"] == "Corner") then updateCorners(d, v, Vector2.new(w, h), outL) else for _, c in pairs(d.corners) do c.line.Visible = false end end
+                                if itemAllowed and config["Healthbar"] then d.healthBg.Visible = true; d.healthBg.Position = UDim2.new(0, v.X - w/2 - 6, 0, v.Y - h/2); d.healthBg.Size = UDim2.new(0, 2, 0, h); d.healthStroke.Enabled = outL; d.healthFill.Size = UDim2.new(1, 0, hum.Health / hum.MaxHealth, 0); d.healthFill.Position = UDim2.new(0, 0, 1 - hum.Health / hum.MaxHealth, 0) else d.healthBg.Visible = false end
+                                
+                                if itemAllowed and config["Player Nickname"] then 
+                                    d.nameTag.Visible = true; d.nameTag.Text = pName; d.nameTag.TextColor3 = nameC
+                                    d.nameTag.Position = UDim2.new(0, v.X - 100, 0, v.Y - h/2 - 16); d.nameTag.Size = UDim2.new(0, 200, 0, 14) 
+                                else d.nameTag.Visible = false end
+                                
+                                if itemAllowed and config["Weapon ESP"] then
+                                    local tool = char:FindFirstChildOfClass("Tool"); local weaponName = tool and tool.Name or "None"
+                                    local lowerW = string.lower(weaponName)
+                                    local iconId = ""
+                                    if string.find(lowerW, "revolver") or string.find(lowerW, "gun") or string.find(lowerW, "pistol") or string.find(lowerW, "glock") or string.find(lowerW, "deagle") or string.find(lowerW, "usp") then
+                                        iconId = "rbxassetid://15444005703"
+                                    elseif string.find(lowerW, "knife") or string.find(lowerW, "sword") or string.find(lowerW, "blade") or string.find(lowerW, "karambit") or string.find(lowerW, "butterfly") then
+                                        iconId = "rbxassetid://15444005701"
+                                    elseif string.find(lowerW, "ak") or string.find(lowerW, "m4") or string.find(lowerW, "rifle") or string.find(lowerW, "awp") or string.find(lowerW, "sniper") then
+                                        iconId = "rbxassetid://15444005713" -- Rifle icon (standardized)
+    end
+
+                                    if iconId ~= "" then
+                                        d.weaponIcon.Visible = true; d.weaponIcon.Image = iconId
+                                        d.weaponIcon.Position = UDim2.new(0, v.X - 9, 0, v.Y + h/2 + 2)
+                                        d.weaponTag.Visible = true; d.weaponTag.Text = "[" .. weaponName .. "]"
+                                        d.weaponTag.Position = UDim2.new(0, v.X - 100, 0, v.Y + h/2 + 20)
+                                    else
+                                        d.weaponIcon.Visible = false
+                                        d.weaponTag.Visible = true; d.weaponTag.Text = "[" .. weaponName .. "]"
+                                        d.weaponTag.Position = UDim2.new(0, v.X - 100, 0, v.Y + h/2 + 2)
+                                    end
+                                    d.weaponTag.TextColor3 = nameC; d.weaponTag.Size = UDim2.new(0, 200, 0, 12)
+                                else d.weaponTag.Visible = false; d.weaponIcon.Visible = false end
+
+                                if itemAllowed and config["Distance Tag"] then 
+                                    d.distTag.Visible = true; d.distTag.Text = "["..dist.."m]"
+                                    local yOff = h/2 + (config["Weapon ESP"] and (d.weaponIcon.Visible and 32 or 14) or 2)
+                                    d.distTag.Position = UDim2.new(0, v.X - 100, 0, v.Y + (config["Distance Type"] == "Bottom" and yOff or -h-16)); d.distTag.Size = UDim2.new(0, 200, 0, 14)
+                                else d.distTag.Visible = false end
+                                
+                                if itemAllowed and config["Head Dot"] and head then 
+                                    local headPos, onS = cam:WorldToViewportPoint(head.Position)
+                                    if onS and headPos.Z > 0 then
+                                        local topPos = cam:WorldToViewportPoint(head.Position + Vector3.new(0, head.Size.Y/2, 0)); local botPos = cam:WorldToViewportPoint(head.Position - Vector3.new(0, head.Size.Y/2, 0))
+                                        local hSize = math.clamp(math.abs(topPos.Y - botPos.Y) * 0.55, 2, 100)
+                                        d.hDot.Size = UDim2.new(0, hSize, 0, hSize); d.hDot.Visible = true; d.hDot.Position = UDim2.new(0, headPos.X, 0, headPos.Y); d.hDot.BackgroundTransparency = 1; d.hDotOutline.Color = boxColor; d.hDotOutline.Enabled = true
+                                    else d.hDot.Visible = false end
+                                else d.hDot.Visible = false end
+                                
+                                -- Skeleton ESP Alignment (Anatomical)
+    if itemAllowed and config["Skeleton"] then
+                                    local rigType = (hum.RigType == Enum.HumanoidRigType.R15) and "R15" or "R6"
+                                    local conns = skeletonConnections[rigType]
+                                    for i, conn in ipairs(conns) do
+--                                         local pos1, pos2
+                                        if rigType == "R15" and #conn == 4 then
+                                            -- Anatomical Joint-to-Joint (Part1, Att1, Part2, Att2)
+    local part1, part2 = char:FindFirstChild(conn[1]), char:FindFirstChild(conn[3])
+                                            if part1 and part2 then
+                                                local att1, att2 = part1:FindFirstChild(conn[2]), part2:FindFirstChild(conn[4])
+                                                if att1 and att2 then
+                                                    pos1, pos2 = att1.WorldPosition, att2.WorldPosition
+                                                else
+                                                    pos1, pos2 = part1.Position, part2.Position
+                                                end
+                                            end
+                                        else
+                                            -- Legacy Part-to-Part (Part1, Part2, [Optional Attachment])
+    local part1, part2 = char:FindFirstChild(conn[1]), char:FindFirstChild(conn[2])
+                                            if part1 and part2 then
+                                                pos1, pos2 = part1.Position, part2.Position
+                                                if rigType == "R15" and conn[3] then
+                                                    local att = part1:FindFirstChild(conn[3]) or part2:FindFirstChild(conn[3])
+                                                    if att then
+                                                        -- Shared joint fallback (legacy)
+                                                        pos1 = att.WorldPosition; pos2 = att.WorldPosition
+                                                    end
+                                                end
+                                            end
+                                        end
+                                        
+                                        if pos1 and pos2 then
+                                            local v1, o1 = cam:WorldToViewportPoint(pos1)
+                                            local v2, o2 = cam:WorldToViewportPoint(pos2)
+                                            if (o1 and o2) and v1.Z > 0 and v2.Z > 0 then
+                                                drawLine(d.bones[i], Vector2.new(v1.X, v1.Y), Vector2.new(v2.X, v2.Y), outL)
+                                                d.bones[i].line.BackgroundColor3 = skelC
+                                            else d.bones[i].line.Visible = false end
+                                        elseif d.bones[i] then d.bones[i].line.Visible = false end
+                                    end
+                                else for _, b in pairs(d.bones) do b.line.Visible = false end end
+                                
+                                if itemAllowed and config["Healthbar"] then
+                                    local hp = hum.Health; local maxHp = hum.MaxHealth; local pct = math.clamp(hp / maxHp, 0, 1)
+                                    local hCol = Color3.fromHSV(pct * 0.35, 1, 1)
+                                    d.healthBg.Visible = true; d.healthBg.Position = UDim2.new(0, v.X - w/2 - 6, 0, v.Y - h/2); d.healthBg.Size = UDim2.new(0, 3, 0, h)
+                                    d.healthFill.Size = UDim2.new(1, 0, pct, 0); d.healthFill.Position = UDim2.new(0, 0, 1-pct, 0); d.healthFill.BackgroundColor3 = hCol
+                                else d.healthBg.Visible = false end
+
+                                if itemAllowed and config["Enable box"] then
+                                    d.box.Visible = true; d.box.Position = UDim2.new(0, v.X - w/2, 0, v.Y - h/2); d.box.Size = UDim2.new(0, w, 0, h)
+                                    d.stroke.Color = boxColor; d.stroke.Enabled = outL; d.outline.Enabled = outL
+                                    d.filledBox.Visible = config["Filled box"]
+                                else d.box.Visible = false end
+
+                                if itemAllowed and config["Enable box"] and (config["Box Type"] == "Corner") then updateCorners(d, v, size, outL)
+                                else for _, c in pairs(d.corners) do c.line.Visible = false end end
+
+                                if itemAllowed and config["Charm Tracers"] then
+                                    local tracerColor = config["Tracer Color"] or Color3.fromRGB(160, 32, 240)
+                                    local screenBottom = Vector2.new(viewportSize.X / 2, viewportSize.Y)
+                                    local attachMode = config["Charm Tracer Attachment"] or "Bottom"
+                                    local tPosWorld = root.Position
+                                    if attachMode == "Head" and head then tPosWorld = head.Position
+                                    elseif attachMode == "Torso" then tPosWorld = root.Position
+                                    elseif attachMode == "Bottom" then tPosWorld = root.Position - Vector3.new(0, h/2, 0) end
+                                    local tPosViewport, tOnS = cam:WorldToViewportPoint(tPosWorld)
+                                    if tOnS and tPosViewport.Z > 0 then
+                                        drawLine(d.tracer, screenBottom, Vector2.new(tPosViewport.X, tPosViewport.Y), outL)
+                                        d.tracer.line.BackgroundColor3 = tracerColor
+                                    else d.tracer.line.Visible = false end
+                                else d.tracer.line.Visible = false end
+                                
+                                -- ========================================================
+                                -- Charm ESP: Material + Highlight
+                                -- Solid = SmoothPlastic color, NO highlight, KEEP clothing
+                                -- Shaded = SmoothPlastic + soft highlight
+                                -- Glow = Neon + bright highlight
+                                -- Glow Outline = Neon, outline only (fill hidden)
+                                -- Iridescent = Ice material + highlight
+                                -- ========================================================
+    local _charmMat = isSelf and (config["Self Charm Material"] or "Disable") or (config["Charm Material"] or "Disable")
+                                local _selfCharm = isSelf and (config["Enable Self Chams"] == true) and config["Self Charm Material"] ~= "Disable"
+                                if (config["Enable Charm"] or _selfCharm) and char and (not config["Stream Proof"]) and _charmMat ~= "Disable" then
+                                    local _fillC = isSelf and (config["Self Charm Color"] or Color3.fromRGB(160, 80, 255)) or (isTm and (config["Team Charm Color"] or config["Team Box Color"] or Color3.fromRGB(0,255,0)) or (config["Enemy Charm Color"] or config["Enemy Box Color"] or Color3.fromRGB(255,0,0)))
+                                    local _matEnum
+                                    local _useHighlight = false
+                                    local _fillTrans = 0.5
+                                    local _outlineTrans = 0.5
+--                                     for Glow/Glow Outline/Iridescent modes
+                                    -- For Solid and Shaded we KEEP clothing visible
+    local _hideClothing = false
+                                    local _hideDecals = false
+                                    local _lowMat = string.lower(_charmMat)
+                                    if _lowMat == "solid" or _lowMat == "plastic" or _lowMat == "smoothplastic" then
+                                        _matEnum = (_lowMat == "smoothplastic" and Enum.Material.SmoothPlastic or Enum.Material.Plastic); _useHighlight = false
+                                    elseif _lowMat == "glow" or _lowMat == "neon" then
+                                        _matEnum = Enum.Material.Neon; _useHighlight = true; _fillTrans = 0.3; _outlineTrans = 0.2; _hideClothing = true; _hideDecals = true
+                                    elseif _lowMat == "glow outline" or _lowMat == "outline" then
+                                        _matEnum = Enum.Material.Neon; _useHighlight = true; _fillTrans = 1; _outlineTrans = 0; _hideClothing = true; _hideDecals = true
+                                    elseif _lowMat == "iridescent" or _lowMat == "glass" or _lowMat == "ice" then
+                                        _matEnum = (_lowMat == "glass" and Enum.Material.Glass or (_lowMat == "ice" and Enum.Material.Ice or Enum.Material.Ice)); _useHighlight = true; _fillTrans = 0.2; _outlineTrans = 0.1; _hideClothing = true; _hideDecals = true
+                                    elseif _lowMat == "forcefield" then
+                                        _matEnum = Enum.Material.ForceField; _useHighlight = true; _fillTrans = 0.5; _outlineTrans = 0.5; _hideClothing = true; _hideDecals = true
+                                    elseif _lowMat == "pure highlight" or _lowMat == "highlight" then
+                                        _matEnum = nil; _useHighlight = true; _fillTrans = 0.5; _outlineTrans = 0; _hideClothing = false; _hideDecals = false
+                                    else -- Default fallback
+                                        _matEnum = Enum.Material.ForceField; _useHighlight = true; _fillTrans = 0.5; _outlineTrans = 0.5; _hideClothing = true; _hideDecals = true
+                                    end
+                                    -- Apply Highlight (Force Purple Outline)
+                                    pcall(function()
+                                        d.highlight.Adornee = char
+                                        d.highlight.FillColor = _fillC
+                                        d.highlight.OutlineColor = config["Tracer Color"] or Color3.fromRGB(160, 32, 240)
+                                        d.highlight.FillTransparency = _fillTrans
+                                        d.highlight.OutlineTransparency = 0
+                                        d.highlight.Enabled = true
+                                        d.highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                                    end)
+                                    -- Apply material to BaseParts (SurfaceAppearance/Shirt/Pants      E      )
+    for _, _p in ipairs(char:GetDescendants()) do
+                                        if _p:IsA("BasePart") and _p.Name ~= "HumanoidRootPart" then
+                                            if not d.originalProps[_p] then
+                                                d.originalProps[_p] = {Material = _p.Material, Color = _p.Color, TextureID = _p:IsA("MeshPart") and _p.TextureID or nil}
+                                            end
+                                            if _matEnum then
+                                                pcall(function()
+                                                    _p.Material = _matEnum
+                                                    _p.Color = _fillC
+                                                    if _p:IsA("MeshPart") then _p.TextureID = "" end
+                                                end)
+                                            end
+                                        elseif _p:IsA("Decal") or _p:IsA("Texture") then
+                                            if _hideDecals then
+                                                if not d.originalProps[_p] then d.originalProps[_p] = {Transparency = _p.Transparency} end
+                                                pcall(function() _p.Transparency = 1 end)
+                                            end
+                                        elseif _p:IsA("Shirt") or _p:IsA("Pants") or _p:IsA("ShirtGraphic") then
+--                                             for Glow/Neon/Iridescent
+    if _hideClothing then
+                                                pcall(function()
+                                                    local hc = char:FindFirstChild("KrazzHiddenClothes")
+                                                    if not hc then hc = Instance.new("Folder", char); hc.Name = "KrazzHiddenClothes" end
+                                                    _p.Parent = hc
+                                                end)
+                                            end
+                                        end
+                                    end
+                                else
+                                    pcall(function() d.highlight.Enabled = false; d.highlight.Adornee = nil end)
+                                    if d.originalProps and next(d.originalProps) then
+                                        for _p, props in pairs(d.originalProps) do
+                                            if _p and _p.Parent then
+                                                pcall(function()
+                                                    if _p:IsA("SurfaceAppearance") and props.Parent then _p.Parent = props.Parent end
+                                                    if _p:IsA("BasePart") then
+                                                        if props.Material then _p.Material = props.Material end
+                                                        if props.Color then _p.Color = props.Color end
+                                                    end
+                                                    if props.TextureID and _p:IsA("MeshPart") then _p.TextureID = props.TextureID end
+                                                    if props.Transparency then _p.Transparency = props.Transparency end
+                                                end)
+                                            end
+                                        end
+                                        d.originalProps = {}
+                                    end
+                                    pcall(function()
+                                        local hc = char:FindFirstChild("KrazzHiddenClothes")
+                                        if hc then for _, c in ipairs(hc:GetChildren()) do pcall(function() c.Parent = char end) end end
+                                    end)
+                                end
+
+                                -- Hit Detection logic (v17) is handled by the global player monitor
+                                isVis = true
+                            end
+                        end
+                    end
+                end
+            else
+                if d then d.container.Visible = false; d.highlight.Enabled = false end
+            end
+            if d then d.container.Visible = isVis end
+        end
+    end
+
+-- for global consistency.
+
+
+    -- ESP Residual Cleanup (Fix Ghosting)
+    for p, d in pairs(espObjects) do
+        if not p or not Players:FindFirstChild(p.Name) then
+            pcall(function()
+                if d.container then d.container.Visible = false end
+                if d.highlight then d.highlight.Enabled = false end
+                if d.chinaHat then pcall(function() d.chinaHat:Destroy() end) end
+            end)
+            espObjects[p] = nil
+        end
+    end    -- Death ESP Rendering (3-Second Glow Replacement)
+--     for visual clarity.
+    end)
+    if not ok then warn("KRAZZ RENDER CRASH: ", tostring(err)) end
+end))
+
+-- Kill Detection Logic (With Timeout Protection)
+local lastKills = 0
+task.defer(function()
+    local lStats = player:WaitForChild("leaderstats", 5)
+    if lStats then
+        local kills = lStats:WaitForChild("Kills", 5)
+        if kills then
+            pcall(function() lastKills = kills.Value end)
+            kills.Changed:Connect(function(val)
+                if val > lastKills then 
+                    _lastKillTime = os.clock()
+                    if config["Auto Kill Chat"] then 
+                        local msg = config["Kill Message"]; 
+                        local tcs = game:GetService("TextChatService"); 
+                        if tcs.ChatVersion == Enum.ChatVersion.TextChatService then 
+                            tcs.TextChannels.RBXGeneral:SendAsync(msg) 
+                        else 
+                            game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents.SayMessageRequest:FireServer(msg, "All") 
+                        end 
+                    end
+                end
+                lastKills = val
+            end)
+        end
+    end
+end)
+
+
+-- Final Initialization Sequence (Priority High)
+task.spawn(function()
+        -- Ensure Environmental Folders exist
+    local cam = workspace.CurrentCamera
+        local folder = cam:FindFirstChild("KrazzVisuals") or Instance.new("Folder", cam)
+        folder.Name = "KrazzVisuals"
+end)
+
+-- AvS2 Mods (RapidFire, NoReload, InfinityAmmo, NoRecoil, NoSpread) removed
+
+
+
+--================ ADVANCED NETWORK SYNC (DECOUPLED ROTATION) =================--
+-- Decouples server-side Hitbox rotation from client-side visual rotation spoofing
+task.spawn(function()
+    local lastJitter = false
+    RunService.Stepped:Connect(function()
+        if _G.Unloaded then return end
+        if config["Enable AntiAim"] and config["Enable Desync"] then
+            local char = player.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            local joints = {
+                RootJoint = root and root:FindFirstChild("RootJoint"), 
+                Neck = char and char:FindFirstChild("Head") and char.Head:FindFirstChild("Neck"),
+                Waist = char and char:FindFirstChild("UpperTorso") and char.UpperTorso:FindFirstChild("Waist")
+            }
+            
+            if joints.RootJoint then
+                lastJitter = not lastJitter
+                local range = (config["Desync Range"] or 15) * 5
+                
+                --[[ CLIENT-SIDE VISUAL SPOOFING ]]
+--                 locally. 
+                -- Since we do NOT have network ownership of the server's hitbox view, 
+-- for other players to see incorrectly.
+    local fakeYaw = math.rad(lastJitter and range or -range)
+                local fakePitch = math.rad(config["Mirror Pitch"] and 180 or 0)
+                
+                joints.RootJoint.C0 = joints.RootJoint.C0 * CFrame.Angles(0, 0, fakeYaw)
+                if joints.Waist then joints.Waist.C0 = joints.Waist.C0 * CFrame.Angles(fakePitch, 0, 0) end
+            end
+        end
+    end)
+end)
+
+-- Velocity-based bypass backup
+task.spawn(function()
+    while task.wait() do
+        if _G.Unloaded then break end
+        if config["Enable AntiAim"] and config["Enable Desync"] then
+            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if root then
+                local oldV = root.Velocity
+                root.Velocity = oldV + Vector3.new(0, 1000, 0)
+                RunService.RenderStepped:Wait()
+                if root and root.Parent then root.Velocity = oldV end
+            end
+        end
+    end
+end)
+
+
+-- World Lighting Sync Loop
+task.spawn(function()
+    while task.wait(0.5) do
+        if _G.Unloaded then break end
+        local l = game:GetService("Lighting")
+        local function ensure(cl, nm) local e = l:FindFirstChild(nm); if not e then e = Instance.new(cl); e.Name = nm; e.Parent = l end return e end
+
+        local b = ensure("BloomEffect", "KrazzBloom")
+        b.Enabled = config["Enable Bloom"]; b.Intensity = config["Bloom Intensity"]/100; b.Size = config["Bloom Size"]; b.Threshold = config["Bloom Threshold"]/100
+        
+        local d = ensure("DepthOfFieldEffect", "KrazzDOF")
+        d.Enabled = config["Enable Depth Of Field (DOF)"]
+        
+        local s = ensure("SunRaysEffect", "KrazzSunRays")
+        s.Enabled = config["Enable Sun Rays"]; s.Intensity = config["Sun Rays Intensity"]/100; s.Spread = config["Sun Rays Spread"]/100
+        
+        local m = ensure("BlurEffect", "KrazzBlur")
+        m.Enabled = config["Enable Motion Blur"]; m.Size = config["Motion Blur Intensity"]/10 * 2.4
+        
+        local cc = ensure("ColorCorrectionEffect", "KrazzCC")
+        cc.Enabled = config["Enable Color Correction"]
+        if config["Color Correction Preset"] == "Vibrant" then cc.Saturation = 0.5; cc.Contrast = 0.2; cc.Brightness = 0; cc.TintColor = Color3.fromRGB(255,255,255)
+        elseif config["Color Correction Preset"] == "Dark" then cc.Saturation = -0.2; cc.Contrast = 0.1; cc.Brightness = -0.1; cc.TintColor = Color3.fromRGB(255,255,255)
+        else cc.Saturation = (config["CC Saturation"]-50)/25; cc.Contrast = (config["CC Contrast"]-50)/25; cc.Brightness = (config["CC Brightness"]-50)/25; cc.TintColor = config["CC Tint Color"] or Color3.fromRGB(255,255,255) end
+
+        if config["Enable Fog"] then
+            l.FogColor = config["Fog Color"] or Color3.fromRGB(255,255,255)
+            l.FogStart = 0
+            local densityNorm = math.clamp(config["Fog Density"] / 100, 0, 1)
+--             for non-linear, thick feel
+            l.FogEnd = math.max(0, (1 - (densityNorm^0.6)) * 1500) + 100
+        else
+            l.FogStart = 0
+            l.FogEnd = 100000
+        end
+        
+        if config["Enable Color Shift"] then l.Ambient = config["Top Ambient/Sky Color"]; l.OutdoorAmbient = config["Bottom Ambient/Ground Color"] end
+        l.Brightness = config["Lighting Brightness"]/50 * 2
+        l.GlobalShadows = config["Enable Shadows"]
+        l.ShadowSoftness = config["Shadow Softness"]/100
+        l.ExposureCompensation = (config["Exposure Compensation"]-50)/25
+        l.EnvironmentDiffuseScale = config["Environment Reflections"]/100
+        l.EnvironmentSpecularScale = config["Environment Reflections"]/100
+        
+        local modeMap = {Global = Enum.Technology.Future, Local = Enum.Technology.ShadowMap, Override = Enum.Technology.Voxel}
+        pcall(function() l.Technology = modeMap[config["Mode Selection"]] or Enum.Technology.Future end)
+        
+        local timeMap = {Day = 14, Night = 0, Evening = 18}
+        l.ClockTime = timeMap[config["Time of Day"]] or 14
+        
+        if config["Third Person"] then
+            player.CameraMode = Enum.CameraMode.Classic
+            player.CameraMaxZoomDistance = config["Third Person Distance"]
+            player.CameraMinZoomDistance = config["Third Person Distance"]
+        else
+            player.CameraMode = Enum.CameraMode.Classic
+            player.CameraMaxZoomDistance = 128
+            player.CameraMinZoomDistance = 0.5
+        end
+    end
+end)
+
+-- Viewmodel & Arm Chams Sync Loop
+-- RunService and origArmProps already declared at top
+RunService.RenderStepped:Connect(function()
+    if _G.Unloaded then return end
+    if config["Enable Viewmodel Offset"] or config["Enable Arm Chams"] then
+        local mat = (config["Arm Chams Material"] == "Neon" and Enum.Material.Neon) or (config["Arm Chams Material"] == "Plastic" and Enum.Material.Plastic) or Enum.Material.ForceField
+        local eColor = config["Arm Chams Color"] or Color3.fromRGB(230,230,230)
+        local refl = (config["Arm Chams Reflectance"] or 100) / 100
+        
+        for _, obj in pairs(camera:GetChildren()) do
+            if obj:IsA("Model") and (string.find(obj.Name:lower(), "viewmodel") or string.find(obj.Name:lower(), "arm") or string.find(obj.Name:lower(), "weapon") or string.find(obj.Name:lower(), "gun")) then
+                if config["Enable Viewmodel Offset"] then
+                    local hrp = obj.PrimaryPart or obj:FindFirstChild("HumanoidRootPart") or (obj:GetChildren()[1] and obj:GetChildren()[1]:IsA("BasePart") and obj:GetChildren()[1])
+                    if hrp then
+                        local transform = CFrame.new(config["Viewmodel Offset X"]/10, config["Viewmodel Offset Y"]/10, config["Viewmodel Offset Z"]/10)
+                        obj:TranslateBy((hrp.CFrame * transform).Position - hrp.Position)
+                    end
+                end
+                if config["Enable Arm Chams"] then
+                    for _, p in ipairs(obj:GetDescendants()) do
+                        if p:IsA("BasePart") and p.Transparency < 1 then
+                            if not origArmProps[p] then origArmProps[p] = {Material = p.Material, Color = p.Color, Reflectance = p.Reflectance, TextureID = p:IsA("MeshPart") and p.TextureID or nil} end
+                            if p:IsA("MeshPart") then p.TextureID = "" end
+                            p.Material = mat
+                            p.Color = eColor
+                            p.Reflectance = refl
+                        end
+                    end
+                end
+            end
+        end
+    else
+        if origArmProps then
+            for p, props in pairs(origArmProps) do
+                if p and p.Parent then
+                    p.Material = props.Material
+                    p.Color = props.Color
+                    p.Reflectance = props.Reflectance
+                    if p:IsA("MeshPart") and props.TextureID then p.TextureID = props.TextureID end
+                end
+            end
+            origArmProps = {}
+        end
+    end
+end)
+
+--[[ FIRST PERSON HEAD FIX ]]
+-- ifier.
+-- Redundant Self Chams loop deleted to avoid competing with syncRig and native game logic.
+
+local JUMP_CN = nil
+task.spawn(function()
+    JUMP_CN = UIS.JumpRequest:Connect(function()
+        if _G.Unloaded then pcall(function() JUMP_CN:Disconnect() end) return end
+        if config["Infinity Jump"] and player.Character then
+            local hum = player.Character:FindFirstChildOfClass("Humanoid")
+            if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+        end
+    end)
+end)
+
+RunService.Stepped:Connect(function()
+    if _G.Unloaded then return end
+    local char = player.Character
+    if char and config["Enable Noclip"] then
+        for _, v in ipairs(char:GetDescendants()) do
+            if v:IsA("BasePart") and v.CanCollide then
+                v.CanCollide = false
+            end
+        end
+    end
+end)
+
+RunService.Heartbeat:Connect(function(dt)
+    if _G.Unloaded then return end
+    local char = player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+
+    if root and hum then
+        -- Speed Strafe: CFrame-only displacement (no Velocity override to avoid AC)
+        -- Velocity manipulation is removed to prevent AvS2 anti-cheat detection
+    if config["Speed Strafe"] and hum.MoveDirection.Magnitude > 0 then
+            -- WalkSpeed must stay at 16; CFrame push is done in PreRender
+            -- Here we just ensure WalkSpeed sanity
+            pcall(function() if hum.WalkSpeed ~= 16 then hum.WalkSpeed = 16 end end)
+        end
+        if config["Airstrafe"] and hum:GetState() == Enum.HumanoidStateType.Freefall and hum.MoveDirection.Magnitude > 0 then
+            -- Airstrafe: safe velocity assist on air only
+    local strafeSpeed = math.clamp(config["Strafe Speed"] or 50, 16, 100)
+            root.Velocity = Vector3.new(hum.MoveDirection.X * strafeSpeed, root.Velocity.Y, hum.MoveDirection.Z * strafeSpeed)
+        end
+    end
+
+    if config["Enable Orbit"] and currentSilentTarget then
+        if root then
+            orbitAngle = orbitAngle + (config["Orbit Speed"] * dt)
+            local offset = Vector3.new(
+                math.cos(orbitAngle) * config["Orbit Distance"],
+                config["Orbit Height"],
+                math.sin(orbitAngle) * config["Orbit Distance"]
+            )
+            local targetPos = currentSilentTarget.Position + offset
+            
+            --[[ ORBIT TELEPORT SAFEGUARD ]]
+            -- Using lerp to move towards the orbit position rather than snapping instantly.
+            -- This bypasses basic distance-delta checks on the server.
+    local currentPos = root.Position
+            local dist = (targetPos - currentPos).Magnitude
+            if dist > 0.1 then
+                local lerpSpeed = 0.4 -- Adjust for smoothness vs speed
+                targetPos = currentPos:Lerp(targetPos, lerpSpeed)
+            end
+
+            if sethiddenproperty then
+                pcall(function() sethiddenproperty(root, "NetworkIsSleeping", true) end)
+            end
+            
+            local lookAt = Vector3.new(currentSilentTarget.Position.X, root.Position.Y, currentSilentTarget.Position.Z)
+            root.CFrame = CFrame.new(targetPos, lookAt)
+            root.Velocity = Vector3.new(0, 0, 0)
+            
+            -- Auto noclip during orbit
+    for _, v in ipairs(char:GetDescendants()) do
+                if v:IsA("BasePart") and v.CanCollide then v.CanCollide = false end
+            end
+            if hum then
+                hum.AutoRotate = false
+            end
+        end
+    else
+        if root and hum then
+            if sethiddenproperty then pcall(function() sethiddenproperty(root, "NetworkIsSleeping", false) end) end
+            if not config["Enable AntiAim"] then
+                hum.AutoRotate = true
+            end
+        end
+    end
+end)
+
+-- Soul Particles Logic (Death-Based Spectral Overhaul)
+local function spawnSoul(pos, color)
+    task.spawn(function()
+        local cam = workspace.CurrentCamera
+        local folder = camera:FindFirstChild(SECURE_ID) or Instance.new("Folder", camera)
+        folder.Name = SECURE_ID
+        local soul = Instance.new("Part")
+        soul.Name = "KrazzSoulObject"; soul.Size = Vector3.new(0.2, 0.2, 0.2); soul.Transparency = 1; soul.CanCollide = false; soul.Anchored = true; soul.Position = pos; soul.Parent = folder
+        
+        --[[ DENSE SPECTRAL OVERHAUL ]]
+    if config["Soul Particles"] and (not config["Stream Proof"]) then
+            -- MIST CORE (Dense glowing cloud)
+    local mist = Instance.new("ParticleEmitter", soul)
+            mist.Texture = "rbxassetid://6022301932"; mist.Rate = 180; mist.Lifetime = NumberRange.new(1.5, 2.5); mist.Speed = NumberRange.new(1, 3); mist.SpreadAngle = Vector2.new(180, 180)
+            mist.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.2, 4), NumberSequenceKeypoint.new(0.8, 5), NumberSequenceKeypoint.new(1, 0)})
+            mist.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.3, 0.4), NumberSequenceKeypoint.new(0.7, 0.4), NumberSequenceKeypoint.new(1, 1)})
+            mist.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 200, 255)), ColorSequenceKeypoint.new(0.5, color), ColorSequenceKeypoint.new(1, Color3.fromRGB(80, 40, 180))})
+            mist.LightEmission = 1; mist.Brightness = 3; mist.LockedToPart = false
+
+            -- SPARKLING SOULS (Innumerable rising lights)
+    local spark = Instance.new("ParticleEmitter", soul)
+            spark.Texture = "rbxassetid://403088934"; spark.Rate = 120; spark.Lifetime = NumberRange.new(2, 3.5); spark.Speed = NumberRange.new(3, 8); spark.Acceleration = Vector3.new(0, 5, 0)
+            spark.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.8), NumberSequenceKeypoint.new(1, 0)}); spark.Transparency = NumberSequence.new(0.2, 1)
+            spark.Color = ColorSequence.new(color); spark.LightEmission = 1; spark.Brightness = 5
+
+            local light = Instance.new("PointLight", soul); light.Color = color; light.Range = 15; light.Brightness = 3
+        end
+
+        task.wait(4.0); pcall(function() soul:Destroy() end)
+    end)
+end
+
+-- Simplified Soul Listener (Death visuals only)
+local function setupSoulListener(p)
+    soulConnections[p] = p.CharacterAdded:Connect(function(char)
+        local hum = char:WaitForChild("Humanoid", 10)
+        local function onDeath()
+            local pos = char:GetPivot().Position
+            local isTm = (p.Team == player.Team)
+            local sColor = isTm and (config["Team Check"] and Color3.fromRGB(70, 230, 70) or Color3.fromRGB(230, 70, 70)) or Color3.fromRGB(230, 70, 70)
+            spawnSoul(pos, sColor)
+        end
+        if hum then hum.Died:Connect(onDeath) end
+        char.AncestryChanged:Connect(function(_, parent) if not parent and hum and hum.Health <= 0 then onDeath() end end)
+    end)
+    if p.Character then task.spawn(function()
+        local char = p.Character
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.Died:Connect(function()
+                local pos = char:GetPivot().Position
+                local isTm = (p.Team == player.Team)
+                local sColor = isTm and (config["Team Check"] and Color3.fromRGB(70, 230, 70) or Color3.fromRGB(230, 70, 70)) or Color3.fromRGB(230, 70, 70)
+                spawnSoul(pos, sColor)
+            end)
+        end
+    end) end
+end
+for _, p in ipairs(Players:GetPlayers()) do 
+    if p ~= player then 
+        setupSoulListener(p)
+        task.wait(0.04) -- Stagger initialization to prevent engine timeout
+    end 
+end
+table.insert(connections, Players.PlayerAdded:Connect(function(p) if p ~= player then setupSoulListener(p) end end))
+
+
+
+-- ============================================================
+-- RAIN (Drawing.Line based, hyper-realism)
+-- ============================================================
+state.rainLines = {}
+state.rainSplashes = {}
+local RAIN_MAX_LINES = 650
+local RAIN_MAX_SPLASHES = 120
+
+local RAIN_SOUND_ID = "rbxassetid://1516791621"
+local rainSnd = Instance.new("Sound", game:GetService("SoundService"))
+rainSnd.SoundId = RAIN_SOUND_ID; rainSnd.Looped = true; rainSnd.Volume = 0.5
+state.rainSound = rainSnd
+
+local function createRainLine()
+    local line = Drawing.new("Line")
+    line.Visible = false
+    line.Color = config["Rain Color"] or Color3.fromRGB(160, 200, 255)
+    line.Thickness = math.random(8, 26) / 10 -- [Variable Sizing]
+    line.Transparency = math.random(3, 7) / 10
+    local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
+    local x = math.random(0, math.floor(vp.X))
+    local y = math.random(-200, math.floor(vp.Y))
+    line.From = Vector2.new(x, y)
+    line.To = line.From + Vector2.new(math.random(-3, 3), math.random(20, 45))
+    return line
+end
+
+
+local function createSplashEffect()
+    local circ = Drawing.new("Circle")
+    circ.Visible = false
+    circ.Transparency = 0.6
+    circ.Thickness = 1
+    circ.Color = Color3.new(1, 1, 1)
+    circ.NumSides = 8
+    return {obj = circ, life = 0}
+end
+
+for i = 1, RAIN_MAX_LINES do state.rainLines[i] = createRainLine() end
+for i = 1, RAIN_MAX_SPLASHES do state.rainSplashes[i] = createSplashEffect() end
+
+local function triggerSplash(pos, scale, color)
+    for i = 1, RAIN_MAX_SPLASHES do
+        local s = state.rainSplashes[i]
+        if s and s.life <= 0 then
+            s.life = 1.2
+            s.obj.Position = pos
+            s.obj.Radius = 0.5 * (scale or 1) -- Half size as requested
+            s.obj.Thickness = 1.5 * (scale or 1)
+            s.obj.Color = color or Color3.new(1,1,1)
+            s.obj.Visible = true
+            break
+        end
+    end
+end
+
+task.spawn(function()
+    local speeds = {}
+    for i = 1, RAIN_MAX_LINES do speeds[i] = math.random(15, 35) end
+    local cam = workspace.CurrentCamera
+    while task.wait(0.01) do
+        if _G.Unloaded then
+            if state.rainLines then for _, l in ipairs(state.rainLines) do pcall(function() l:Remove() end) end end
+            if state.rainSplashes then for _, s in ipairs(state.rainSplashes) do pcall(function() s.obj:Remove() end) end end
+            state.rainLines = {}; state.rainSplashes = {}
+            break
+        end
+        cam = workspace.CurrentCamera
+        local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
+        local intensity = math.clamp(math.floor((config["Rain Intensity"] or 50) * RAIN_MAX_LINES / 100), 0, RAIN_MAX_LINES)
+        local rainOn = config["Enable Rain"] and not config["Stream Proof"]
+        
+        -- Rain Sound Control
+    if rainOn then if not rainSnd.IsPlaying then rainSnd:Play() end else if rainSnd.IsPlaying then rainSnd:Stop() end end
+
+        -- Update Splashes
+    for i = 1, RAIN_MAX_SPLASHES do
+            local s = state.rainSplashes[i]
+            if s and s.life > 0 then
+                s.life = s.life - 0.08
+                s.obj.Radius = s.obj.Radius + 1.2 -- Slower/Smaller expansion
+                s.obj.Transparency = s.life * 0.7
+                if s.life <= 0 then s.obj.Visible = false end
+            end
+        end
+
+        -- Update Drops
+    for i = 1, RAIN_MAX_LINES do
+            local line = state.rainLines[i]
+            if line then
+                if rainOn and i <= intensity then
+                    local rC = config["Rain Color"] or Color3.fromRGB(160, 200, 255)
+                    line.Color = rC
+                    local spd = speeds[i]
+                    local dx = spd * 0.1; local dy = spd
+                    line.From = line.From + Vector2.new(dx, dy)
+                    line.To = line.To + Vector2.new(dx, dy)
+
+                    if line.To.Y > vp.Y then
+                        -- Perspective Impact Distribution
+    local gy = vp.Y * math.random(500, 980) / 1000
+                        local scale = ((gy - vp.Y * 0.5) / (vp.Y * 0.5)) * (1.2 - 0.4) + 0.4
+                        triggerSplash(Vector2.new(line.To.X, gy), scale, rC)
+                        
+                        local nx = math.random(0, math.floor(vp.X))
+                        line.From = Vector2.new(nx, math.random(-150, -20))
+                        line.Thickness = math.random(6, 40) / 10  -- ification
+    local dropLen = math.random(25, 65) 
+                        line.To = line.From + Vector2.new(math.random(-3, 3), dropLen)
+                        speeds[i] = math.random(15, 35)
+                    end
+                    line.Visible = true
+                else
+                    line.Visible = false
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================================
+-- BULLET TRACER (Own shots only, Drawing-line + 3D Neon Part)
+-- Style: "Line" = 2D screen line (default)
+--        3D Neon beam in world space, fades out
+-- Fires ONCE per mouse click (left button), with cooldown.
+-- ============================================================
+local _tracerCooldown = false
+local _tracerCooldownTime = 0.12
+
+-- Bullet Tracer logic completely removed.
+
+-- task.spawn) so it registers immediately
+table.insert(connections, UIS.InputBegan:Connect(function(input, gp)
+-- for GUI clicks
+    -- We allow both since shooting uses gp=false in AvS2
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        getgenv()._KrazzLastClick = os.clock()
+--         for geometric hit detection (flick shots)
+    local cam = workspace.CurrentCamera
+        if cam then
+            getgenv()._KrazzLastAimOrigin = cam.CFrame.Position
+            getgenv()._KrazzLastAimDirection = cam.CFrame.LookVector
+        end
+        -- Tracer call removed
+    end
+end))
+
+-- ============================================================
+-- ESP RADAR (Drawing-based 2D minimap)
+-- local player position
+-- ============================================================
+state.radarUI = {}
+state.radarUI.bg = Drawing.new("Square")
+state.radarUI.bg.Filled = true
+state.radarUI.bg.Color = Color3.fromRGB(6, 10, 24)
+state.radarUI.bg.Transparency = 0.35
+state.radarUI.bg.Visible = false
+
+state.radarUI.border = Drawing.new("Square")
+state.radarUI.border.Filled = false
+state.radarUI.border.Color = Color3.fromRGB(230, 70, 70)
+state.radarUI.border.Thickness = 1.5
+state.radarUI.border.Transparency = 0.5
+state.radarUI.border.Visible = false
+
+state.radarUI.title = Drawing.new("Text")
+state.radarUI.title.Text = "RADAR"
+state.radarUI.title.Color = Color3.fromRGB(230, 70, 70)
+state.radarUI.title.Size = 12
+state.radarUI.title.Font = 2
+state.radarUI.title.Outline = true
+state.radarUI.title.Visible = false
+
+state.radarUI.selfDot = Drawing.new("Circle")
+state.radarUI.selfDot.Radius = 4
+state.radarUI.selfDot.Filled = true
+state.radarUI.selfDot.Color = Color3.fromRGB(255, 255, 255)
+state.radarUI.selfDot.Transparency = 0
+state.radarUI.selfDot.Visible = false
+
+state.radarUI.dots = {}
+local RADAR_MAX_DOTS = 24
+for i = 1, RADAR_MAX_DOTS do
+    local dot = Drawing.new("Circle")
+    dot.Radius = 3
+    dot.Filled = true
+    dot.Color = Color3.fromRGB(230, 70, 70)
+    dot.Transparency = 0
+    dot.Visible = false
+    state.radarUI.dots[i] = dot
+end
+
+state.radarUI.lines = {}
+for i = 1, 2 do
+    local l = Drawing.new("Line")
+    l.Color = Color3.fromRGB(60, 60, 80)
+    l.Thickness = 0.5
+    l.Transparency = 0.6
+    l.Visible = false
+    state.radarUI.lines[i] = l
+end
+
+task.spawn(function()
+    while task.wait(0.05) do
+        if _G.Unloaded then
+            pcall(function() if state.radarUI and state.radarUI.bg then state.radarUI.bg:Remove() state.radarUI.border:Remove() state.radarUI.title:Remove() state.radarUI.selfDot:Remove() end end)
+            if state.radarUI and state.radarUI.dots then for _, d in ipairs(state.radarUI.dots) do pcall(function() d:Remove() end) end end
+            if state.radarUI and state.radarUI.lines then for _, l in ipairs(state.radarUI.lines) do pcall(function() l:Remove() end) end end
+            break
+        end
+
+        local radarOn = config["Enable Radar"] and not config["Stream Proof"]
+        if radarOn and state.radarUI and state.radarUI.bg then
+            local cam = workspace.CurrentCamera
+            local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
+            local rSize = config["Radar Size"] or 180
+            local rRange = config["Radar Range"] or 325
+            -- Position: Top-Left (Avoid Gems/Level UI)
+    local rx = 20
+            local ry = 100
+
+            state.radarUI.bg.Position  = Vector2.new(rx, ry)
+            state.radarUI.bg.Size      = Vector2.new(rSize, rSize)
+            state.radarUI.bg.Visible   = true
+
+            state.radarUI.border.Position = Vector2.new(rx, ry)
+            state.radarUI.border.Size     = Vector2.new(rSize, rSize)
+            state.radarUI.border.Visible  = true
+
+            state.radarUI.title.Position = Vector2.new(rx + 5, ry + 3)
+            state.radarUI.title.Visible  = true
+
+            local cx = rx + rSize / 2
+            local cy = ry + rSize / 2
+
+            -- Cross lines
+            state.radarUI.lines[1].From = Vector2.new(cx, ry + 4)
+            state.radarUI.lines[1].To   = Vector2.new(cx, ry + rSize - 4)
+            state.radarUI.lines[1].Visible = true
+            state.radarUI.lines[2].From = Vector2.new(rx + 4, cy)
+            state.radarUI.lines[2].To   = Vector2.new(rx + rSize - 4, cy)
+            state.radarUI.lines[2].Visible = true
+
+            state.radarUI.selfDot.Position = Vector2.new(cx, cy)
+            state.radarUI.selfDot.Visible  = true
+
+--             for rotation
+    local camLook2D = cam and Vector2.new(cam.CFrame.LookVector.X, cam.CFrame.LookVector.Z).Unit or Vector2.new(0, 1)
+            
+            local myChar = player.Character
+            local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            if not myHRP then return end
+            
+            local myPos = myHRP.Position
+
+            local dotIdx = 0
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= player then
+                    local char = p.Character
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        dotIdx = dotIdx + 1
+                        if dotIdx > RADAR_MAX_DOTS then break end
+                        local dot = state.radarUI.dots[dotIdx]
+                        local delta3D = hrp.Position - myPos
+                        local deltaFlat = Vector2.new(delta3D.X, delta3D.Z)
+                        local dist = deltaFlat.Magnitude
+                        if dist <= rRange then
+                            local fwd = camLook2D
+                            local right = Vector2.new(fwd.Y, -fwd.X)
+                            local relX = deltaFlat:Dot(right)
+                            local relZ = -deltaFlat:Dot(fwd)
+                            local scale = (rSize * 0.48) / rRange
+                            local dotX = cx + (relX * scale)
+                            local dotY = cy + (relZ * scale)
+                            
+                            dot.Position = Vector2.new(
+                                math.clamp(dotX, state.radarUI.bg.Position.X + 2, state.radarUI.bg.Position.X + rSize - 2),
+                                math.clamp(dotY, state.radarUI.bg.Position.Y + 2, state.radarUI.bg.Position.Y + rSize - 2)
+                            )
+                            if isFriendly(p) then
+                                dot.Color = config["Radar Team Color"] or Color3.fromRGB(70,230,70)
+                            else
+                                dot.Color = config["Radar Enemy Color"] or Color3.fromRGB(230,70,70)
+                            end
+                            dot.Visible = true; dot.Transparency = 1; dot.Radius = 3
+                        else
+                            dot.Visible = false
+                        end
+                    end
+                end
+            end
+            -- Hide unused dots
+    if state.radarUI and state.radarUI.dots then
+                for i = dotIdx + 1, RADAR_MAX_DOTS do
+                    if state.radarUI.dots[i] then state.radarUI.dots[i].Visible = false end
+                end
+            end
+        end
+    end
+end)
+
+-- China hat localplayer logic removed
+
+-- ============================================================
+-- SERVER DESYNC (Fake position sent to server via physics skip)
+-- Uses workspace physics pause trick similar to Jitter Desync
+-- ============================================================
+task.spawn(function()
+    while task.wait(0.016) do
+        if _G.Unloaded then break end
+        if config["Enable Server Desync"] then
+            local char = player.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local hum = char:FindFirstChildOfClass("Humanoid")
+                    if hum and hum.Health > 0 then
+                        pcall(function()
+                            local range = config["Server Desync Range"] or 30
+                            local orig = hrp.CFrame
+                            local offset = CFrame.new(math.random(-range, range) / 100, 0, math.random(-range, range) / 100)
+                            hrp.CFrame = orig * offset
+                            task.wait()
+                            hrp.CFrame = orig
+                        end)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================================
+-- SHADOW CLONE (Place fake character ghost at offset positions)
+-- Creates transparent cloned parts around you to confuse server
+-- ============================================================
+state.shadowClones = {}
+
+task.spawn(function()
+    while task.wait(0.1) do
+        if _G.Unloaded then
+            if state.shadowClones then
+                for _, c in ipairs(state.shadowClones) do pcall(function() c:Destroy() end) end
+            end
+            state.shadowClones = {}
+            break
+        end
+
+        local char = player.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local folder = workspace:FindFirstChild("KrazzVisuals")
+
+        if config["Enable Shadow Clone"] and char and hrp then
+            if not folder then
+                folder = Instance.new("Folder", workspace)
+                folder.Name = "KrazzVisuals"
+            end
+
+            local count = math.clamp(math.floor(config["Shadow Clone Count"] or 2), 1, 5)
+            local offset = config["Shadow Clone Offset"] or 5
+            
+--             if count changed
+    while #state.shadowClones > count do
+                pcall(function() state.shadowClones[#state.shadowClones]:Destroy() end)
+                table.remove(state.shadowClones, #state.shadowClones)
+            end
+            while #state.shadowClones < count do
+                -- Full Character Appearance (Ghost Style)
+    local ghost = Instance.new("Model", folder)
+                ghost.Name = "KrazzShadowClone"
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                        local p = part:Clone()
+                        p.Parent = ghost; p.Anchored = true; p.CanCollide = false; p.CastShadow = false; p.Transparency = 0.6
+                        p.Material = Enum.Material.ForceField; p.Color = config["Jitter Trail Color"] or Color3.fromRGB(160, 80, 255)
+                        if p:IsA("MeshPart") then p.TextureID = "" end
+                        local sm = p:FindFirstChildOfClass("SpecialMesh")
+                        if sm then sm.TextureId = "" end
+                    end
+                end
+                table.insert(state.shadowClones, ghost)
+            end
+
+            -- Update clones appearance and position
+    for i, clone in ipairs(state.shadowClones) do
+                pcall(function()
+                    local angle = (i / count) * math.pi * 2 + (os.clock() * (config["Shadow Clone Speed"] or 1))
+                    local dx = math.cos(angle) * offset
+                    local dz = math.sin(angle) * offset
+                    clone:PivotTo(hrp.CFrame * CFrame.new(dx, 0, dz))
+                end)
+            end
+        else
+            for _, c in ipairs(state.shadowClones) do pcall(function() c:Destroy() end) end
+            state.shadowClones = {}
+        end
+    end
+end)
+-- ification
+game:GetService("StarterGui"):SetCore("SendNotification", {
+    Title = "KRAZZ.WIN v2.4.9.4",
+    Text = "Yub-X Integrated: Desync Enhanced.",
+    Duration = 5
+})
+
+-- FORCE PROOF: 11th ATTEMPT SIGNAL (Drawing API Verification)
+-- LEGACY BRANDING REMOVED PER REQUEST
+
+-- Initialize Monitoring (Moved to Top-Level)
+for _, p in ipairs(Players:GetPlayers()) do monitorHealth(p) end
+table.insert(connections, Players.PlayerAdded:Connect(monitorHealth))
+-- functions moved to top-level scope
+
+--[[ FINAL SYSTEMS: Hitsound/Hitmark/Death ESP - Self-Only, Zero-Delay, Fully Client-Side ]]
+-- local player confirms a hit via weapon hook OR Tool.Activated + HP change.
+-- Drawing API + PlayLocalSound: zero DataModel footprint, fully invisible to anti-cheat.
+task.spawn(function()
+    while task.wait(0.016) do
+        if _G.Unloaded then break end
+        if not config["Hitsound"] and not config["Hit Notifications"] then continue end
+        local weaponFiredAt = getgenv()._KrazzWeaponFiredAt or 0
+        local shotRecently = (os.clock() - weaponFiredAt < 1.5)  -- Tool.Activated within 1.5s
+    for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= player and p.Character then
+                local char = p.Character
+                local hp = getBestHealth(char)
+                local lastHp = victimHealths[p] or hp
+                victimHealths[p] = hp
+--                 if we explicitly hit this player (hook) OR our weapon fired recently
+    local isExplicit = (os.clock() - (_localHitRegister[p] or 0) < 2.0)
+                local charPos = char:GetPivot().Position
+                local dist = (charPos - camera.CFrame.Position).Magnitude
+                local isNearbyShot = shotRecently and dist < 120
+                if hp < lastHp and (isExplicit or isNearbyShot) then
+                    local dmg = math.floor(lastHp - hp)
+                    local isKill = (hp <= 0)
+                    if isKill then
+                        _KrazzLastKillTime = os.clock()
+                        getgenv().KrazzKill = os.clock()  -- triggers At Direction override
+                        _KRAZZ_ABSOLUTE_FEEDBACK(char, true, dmg)
+                    else
+                        if os.clock() - _KrazzLastSoundTime > 0.1 then
+                            _KrazzLastSoundTime = os.clock()
+                            _KRAZZ_ABSOLUTE_FEEDBACK(char, false, dmg)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- force sync HP for late joiners
+task.spawn(function()
+    while task.wait(1.5) do
+        if _G.Unloaded then break end
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= player and p.Character then
+                local h = getAvS2Health(p.Character)
+--                 if we haven't polled recently (don't override active tracking)
+    if not playerHealthMap[p] then playerHealthMap[p] = h end
+            end
+        end
+    end
+end)
+
+-- ============================================================
+--[[ KRAZZ RAIN & LIGHTNING ENGINE v3.0 ]]
+-- 3                +                             +             E                  E      
+-- Trail/Beam          + ParticleEmitter   /         
+-- ============================================================
+task.spawn(function()
+    local cam = workspace.CurrentCamera
+    local Lit = Lighting or game:GetService("Lighting")
+    local Debris = game:GetService("Debris")
+    local rand = Random.new()
+
+    -- ============================================================
+    --                   E
+    -- ============================================================
+    local rainRoot = Instance.new("Folder")
+    rainRoot.Name = "KrazzRain"; rainRoot.Parent = cam
+
+    local splashRoot = Instance.new("Folder")
+    splashRoot.Name = "KrazzSplash"; splashRoot.Parent = workspace
+
+    -- ============================================================
+    --                                        E   E    -- ============================================================
+    local rainCC = Instance.new("ColorCorrectionEffect")
+    rainCC.Name = "KrazzRainCC"; rainCC.Parent = Lit
+    rainCC.Brightness = 0; rainCC.Contrast = 0; rainCC.Saturation = 0
+    rainCC.TintColor = Color3.new(1,1,1); rainCC.Enabled = false
+
+    local rainBloom = Instance.new("BloomEffect")
+    rainBloom.Name = "KrazzRainBloom"; rainBloom.Parent = Lit
+    rainBloom.Intensity = 0.3; rainBloom.Size = 14; rainBloom.Threshold = 0.9
+    rainBloom.Enabled = false
+
+    -- ============================================================
+    --             E    -- ============================================================
+    local rainSound = Instance.new("Sound", rainRoot)
+    rainSound.SoundId = "rbxassetid://9112793880"
+    rainSound.Looped = true; rainSound.Volume = 0
+
+    local thunderSound = Instance.new("Sound")
+    thunderSound.SoundId = "rbxassetid://231917744"
+    thunderSound.Volume = 1.8; thunderSound.Parent = rainRoot
+
+    -- ============================================================
+    --[[ LAYER 1: FAR RAIN    E         E            E   E             ]]
+    --                E                           E         E      ZOffset      E    -- ============================================================
+    local farPart = Instance.new("Part", rainRoot)
+    farPart.Anchored = true; farPart.CanCollide = false
+    farPart.Transparency = 1; farPart.Size = Vector3.new(1,1,1)
+    farPart.CastShadow = false; farPart.Name = "FarRain"
+
+    local farEmitter = Instance.new("ParticleEmitter", farPart)
+    farEmitter.Texture = "rbxassetid://6101261905"  --          E                        
+    farEmitter.LightEmission = 0.08; farEmitter.LightInfluence = 0.9
+    farEmitter.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(160, 175, 200)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(180, 195, 220)),
+    })
+    farEmitter.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.75),
+        NumberSequenceKeypoint.new(0.6, 0.60),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    farEmitter.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, rand:NextNumber(0.012, 0.022)),
+        NumberSequenceKeypoint.new(1, rand:NextNumber(0.006, 0.012)),
+    })
+    farEmitter.Lifetime = NumberRange.new(0.35, 0.55)
+    farEmitter.Rate = 1200
+    farEmitter.Speed = NumberRange.new(90, 130)
+    farEmitter.VelocityInheritance = 0
+    farEmitter.Acceleration = Vector3.new(2.5, -200, 0.8)  --             E    farEmitter.Orientation = Enum.ParticleOrientation.VelocityParallel
+    farEmitter.ZOffset = -12   --          
+    farEmitter.RotSpeed = NumberRange.new(-3, 3)
+    farEmitter.Enabled = false
+
+    -- ============================================================
+    --[[ LAYER 2: MID RAIN    E               E   E             ]]
+    -- ============================================================
+    local midPart = Instance.new("Part", rainRoot)
+    midPart.Anchored = true; midPart.CanCollide = false
+    midPart.Transparency = 1; midPart.Size = Vector3.new(1,1,1)
+    midPart.CastShadow = false; midPart.Name = "MidRain"
+
+    local midEmitter = Instance.new("ParticleEmitter", midPart)
+    midEmitter.Texture = "rbxassetid://6101261905"
+    midEmitter.LightEmission = 0.12; midEmitter.LightInfluence = 0.8
+    midEmitter.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(190, 205, 225)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(210, 220, 240)),
+    })
+    midEmitter.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.45),
+        NumberSequenceKeypoint.new(0.5, 0.35),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    midEmitter.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.038),
+        NumberSequenceKeypoint.new(1, 0.018),
+    })
+    midEmitter.Lifetime = NumberRange.new(0.22, 0.38)
+    midEmitter.Rate = 380
+    midEmitter.Speed = NumberRange.new(120, 165)
+    midEmitter.Acceleration = Vector3.new(3, -260, 1)
+    midEmitter.Orientation = Enum.ParticleOrientation.VelocityParallel
+    midEmitter.ZOffset = -2
+    midEmitter.RotSpeed = NumberRange.new(-5, 5)
+    midEmitter.Enabled = false
+
+    -- ============================================================
+    --[[ LAYER 3: NEAR RAIN    ETrail/Beam                                  ]]
+    -- Attachment         Beam         E                                 
+    -- ============================================================
+    local NEAR_STREAK_COUNT = 28    local nearStreaks = {}
+    local nearFolder = Instance.new("Folder", rainRoot)
+    nearFolder.Name = "NearStreaks"
+
+    local function createStreak()
+        local part = Instance.new("Part", nearFolder)
+        part.Anchored = true; part.CanCollide = false
+        part.Transparency = 1; part.Size = Vector3.new(0.05, 0.05, 0.05)
+        part.CastShadow = false
+        local a0 = Instance.new("Attachment", part)
+        local a1 = Instance.new("Attachment", part)
+        local beam = Instance.new("Beam", part)
+        beam.Attachment0 = a0; beam.Attachment1 = a1
+        beam.FaceCamera = true
+        beam.LightEmission  = 0.9
+        beam.LightInfluence = 0.05
+        beam.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(220, 230, 255)),
+            ColorSequenceKeypoint.new(0.5, Color3.fromRGB(200, 215, 245)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(180, 195, 230)),
+        })
+        beam.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 1),
+            NumberSequenceKeypoint.new(0.08, 0.25),
+            NumberSequenceKeypoint.new(0.85, 0.20),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        beam.Width0 = rand:NextNumber(0.012, 0.028)
+        beam.Width1 = rand:NextNumber(0.004, 0.010)
+        beam.Segments = 1
+        beam.CurveSize0 = 0; beam.CurveSize1 = 0
+        beam.Enabled = false
+        --
+    local info = {
+            part = part, a0 = a0, a1 = a1, beam = beam,
+            active = false, t = 0, duration = 0,
+            startPos = Vector3.new(), endPos = Vector3.new(),
+            speed = 0
+        }
+        table.insert(nearStreaks, info)
+        return info
+    end
+
+    for i = 1, NEAR_STREAK_COUNT do createStreak() end
+
+    local function fireStreak()
+        local streak
+        for _, s in ipairs(nearStreaks) do
+            if not s.active then streak = s; break end
+        end
+        if not streak then return end
+
+        local camCF = cam.CFrame
+        local camPos = camCF.Position
+        local spreadX = rand:NextNumber(-18, 18)
+        local spreadZ = rand:NextNumber(-18, 18)
+        local height  = rand:NextNumber(12, 30)
+        local length  = rand:NextNumber(2.5, 5.0)
+        local spd     = rand:NextNumber(45, 85)
+
+        local windX = rand:NextNumber(0.03, 0.09)
+        local windZ = rand:NextNumber(0.0,  0.04)
+
+        local origin = camPos + Vector3.new(spreadX, height, spreadZ)
+        local dir    = Vector3.new(windX, -1, windZ).Unit
+
+        streak.startPos = origin
+        streak.endPos   = origin + dir * length
+        streak.speed    = spd
+        streak.t        = 0
+        streak.duration = rand:NextNumber(0.08, 0.16)
+        streak.active   = true
+        streak.beam.Width0 = rand:NextNumber(0.010, 0.032)
+        streak.beam.Width1 = rand:NextNumber(0.004, 0.012)
+        streak.beam.Enabled = true
+    end
+
+    -- ============================================================
+    --[[ SPLASH SYSTEM    E                  E            E          ]]
+    -- ============================================================
+    local SPLASH_POOL_SIZE = 8
+    local splashPool = {}
+
+    local function createSplashEmitter()
+        local p = Instance.new("Part", splashRoot)
+        p.Anchored = true; p.CanCollide = false
+        p.Transparency = 1; p.Size = Vector3.new(0.1, 0.1, 0.1); p.CastShadow = false
+        local pe = Instance.new("ParticleEmitter", p)
+        pe.Texture  = "rbxassetid://4834067"   --             E               
+        pe.Color    = ColorSequence.new(Color3.fromRGB(200, 215, 240))
+        pe.LightEmission = 0.1; pe.LightInfluence = 0.9
+        pe.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.4),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        pe.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, rand:NextNumber(0.08, 0.18)),
+            NumberSequenceKeypoint.new(0.6, rand:NextNumber(0.22, 0.35)),
+            NumberSequenceKeypoint.new(1, 0),
+        })
+        pe.Lifetime     = NumberRange.new(0.12, 0.22)
+        pe.Rate         = 0   -- Emit()               E        pe.Speed        = NumberRange.new(2, 7)
+        pe.SpreadAngle  = Vector2.new(60, 60)
+        pe.RotSpeed     = NumberRange.new(-30, 30)
+        pe.LockedToPart = false
+        table.insert(splashPool, {part = p, emitter = pe, free = true})
+    end
+    for i = 1, SPLASH_POOL_SIZE do createSplashEmitter() end
+
+    local function emitSplash(pos)
+        local slot
+        for _, s in ipairs(splashPool) do
+            if s.free then slot = s; break end
+        end
+        if not slot then return end
+        slot.free = false
+        slot.part.Position = pos
+        slot.emitter:Emit(rand:NextInteger(2, 5))
+        task.delay(0.35, function() slot.free = true end)
+    end
+
+    -- ============================================================
+    --[[ LIGHTING STATES ]]
+    -- ============================================================
+    local _rainLitApplied = false
+    local _rainLitCache = { FogEnd = 100000, FogStart = 0, FogColor = Color3.new(1,1,1), Brightness = 1, ExposureCompensation = 0 }
+
+    local function applyRainLighting(on)
+        if on == _rainLitApplied then return end
+        _rainLitApplied = on
+        if on then
+            _rainLitCache.FogEnd = Lit.FogEnd
+            _rainLitCache.FogStart = Lit.FogStart
+            _rainLitCache.FogColor = Lit.FogColor
+            _rainLitCache.Brightness = Lit.Brightness
+            _rainLitCache.ExposureCompensation = Lit.ExposureCompensation
+
+            TweenService:Create(Lit, TweenInfo.new(2), {
+                FogEnd   = 320,
+                FogStart = 0,
+                FogColor = Color3.fromRGB(110, 115, 130),
+                Brightness = 0.82,
+                ExposureCompensation = -0.15
+            }):Play()
+            rainCC.Contrast   = 0.12
+            rainCC.Saturation = -0.15
+            rainCC.TintColor  = Color3.fromRGB(150, 160, 190)
+            rainCC.Enabled = true
+            rainBloom.Intensity = 0.15
+            rainBloom.Enabled = true
+        else
+            TweenService:Create(Lit, TweenInfo.new(1.5), {
+                FogEnd   = _rainLitCache.FogEnd,
+                FogStart = _rainLitCache.FogStart,
+                FogColor = _rainLitCache.FogColor,
+                Brightness = _rainLitCache.Brightness,
+                ExposureCompensation = _rainLitCache.ExposureCompensation
+            }):Play()
+            rainCC.Enabled = false
+            rainBloom.Enabled = false
+        end
+    end
+
+    -- ============================================================
+    --[[ LOCALIZED LIGHTNING SYSTEM v2 ]]
+    --                   E                  PointLight + Beam         E+          E      
+    -- ============================================================
+    local lightningFolder = Instance.new("Folder", workspace)
+    lightningFolder.Name = "KrazzLightning"
+
+    local function createLightningBolt(startPos, endPos)
+        --       E            Bolt   E   Eart       E      E   E
+    local segCount = math.random(6, 10)
+        local parts = {}
+        local prevPos = startPos
+        for i = 1, segCount do
+            local frac   = i / segCount
+            local lerped = startPos:Lerp(endPos, frac)
+            --                         E         E                           E
+    local jitter = (1 - frac) * 6
+            local nextPos = lerped + Vector3.new(
+                rand:NextNumber(-jitter, jitter),
+                0,
+                rand:NextNumber(-jitter, jitter)
+            )
+            local seg = Instance.new("Part", lightningFolder)
+            seg.Anchored = true; seg.CanCollide = false
+            seg.Material = Enum.Material.Neon
+            seg.Color = Color3.fromRGB(180, 210, 255)
+            local len = (nextPos - prevPos).Magnitude
+            seg.Size = Vector3.new(0.08 + rand:NextNumber(0, 0.05), 0.08, len)
+            seg.CFrame = CFrame.new((prevPos + nextPos) * 0.5, nextPos)
+            table.insert(parts, seg)
+            prevPos = nextPos
+        end
+        task.spawn(function()
+            task.wait(0.05)
+            for _, p in ipairs(parts) do
+                TweenService:Create(p, TweenInfo.new(0.12), {
+                    Transparency = 1
+                }):Play()
+            end
+            task.delay(0.15, function()
+                for _, p in ipairs(parts) do
+                    pcall(function() p:Destroy() end)
+                end
+            end)
+        end)
+    end
+
+    local function runLightning()
+        if not (config and config["Enable Rain"]) then return end
+
+        local camPos = cam.CFrame.Position
+        --                            E                  50   E50stud                  E   E
+    local dist   = rand:NextNumber(80, 250)
+        local angle  = rand:NextNumber(0, math.pi * 2)
+        local strikeX = camPos.X + math.cos(angle) * dist
+        local strikeZ = camPos.Z + math.sin(angle) * dist
+        local topY    = 160
+        local botY    = rand:NextNumber(20, 60)   --
+    local strikeTop = Vector3.new(strikeX, topY, strikeZ)
+        local strikeBot = Vector3.new(strikeX, botY, strikeZ)
+
+        --    .                      
+        createLightningBolt(strikeTop, strikeBot)
+
+        --    .          PointLight   E      E      E      E            E      E
+    local bolt = Instance.new("Part", lightningFolder)
+        bolt.Anchored = true; bolt.CanCollide = false
+        bolt.Transparency = 1; bolt.Size = Vector3.new(1,1,1)
+        bolt.Position = (strikeTop + strikeBot) * 0.5
+
+        local light = Instance.new("PointLight", bolt)
+        light.Color     = Color3.fromRGB(175, 205, 255)  --       
+        light.Range     = rand:NextNumber(180, 280)
+        light.Brightness = 0
+        light.Enabled = true
+
+        --          E         E   E   E                              E
+    local flickerCount = rand:NextInteger(2, 4)
+        task.spawn(function()
+            for k = 1, flickerCount do
+                local strength = (1 - (k-1)/flickerCount) * 3.5  --       E            E                light.Brightness = strength
+                task.wait(rand:NextNumber(0.04, 0.09))
+                light.Brightness = 0
+                task.wait(rand:NextNumber(0.03, 0.06))
+            end
+            pcall(function() bolt:Destroy() end)
+        end)
+
+        --    .       E         E               E       E43m/s    ERoblox 1stud=0.28m         E    local distToCamera = (strikeTop - camPos).Magnitude
+        local soundDelay   = distToCamera * 0.0082   --    Edist/343 * 2.8
+        soundDelay = math.clamp(soundDelay, 0.08, 8.0)
+
+        task.delay(soundDelay, function()
+            if thunderSound and thunderSound.Parent then
+                thunderSound.Volume  = math.clamp(2.2 - soundDelay * 0.18, 0.3, 2.2)
+                thunderSound.Pitch   = rand:NextNumber(0.88, 1.12)
+                thunderSound:Play()
+            end
+        end)
+
+        pcall(function()
+    local atm = Lit:FindFirstChildOfClass("Atmosphere")
+            if atm then
+                local origGlare = atm.Glare
+                atm.Glare = math.min(origGlare + 0.15, 1)
+                task.delay(0.18, function()
+                    pcall(function()
+                        TweenService:Create(atm, TweenInfo.new(0.4), {Glare = origGlare}):Play()
+                    end)
+                end)
+            end
+        end)
+    end
+
+    -- ============================================================
+    --[[ MAIN RENDER LOOP ]]
+    -- ============================================================
+    local isIndoor = false
+    local lastRaycast = 0
+    local lastStreak  = 0
+    local lastSplash  = 0
+    local lastAmbientThunder = 0
+    local dt = 0
+
+    -- NearStreak:    E
+    local function updateNearStreaks(elapsed)
+        for _, s in ipairs(nearStreaks) do
+            if s.active then
+                s.t = s.t + elapsed
+                if s.t >= s.duration then
+                    s.beam.Enabled = false
+                    s.active = false
+                else
+                    --                               E                        E
+    local drop = Vector3.new(0, -s.speed * s.t, 0)
+                    local wp0 = s.startPos + drop
+                    local wp1 = s.endPos   + drop
+                    s.a0.WorldPosition = wp0
+                    s.a1.WorldPosition = wp1
+                    s.part.Position = (wp0 + wp1) * 0.5
+                end
+            end
+        end
+    end
+
+    local lastDt = os.clock()
+    table.insert(connections, RunService.RenderStepped:Connect(function()
+        local now = os.clock()
+        local elapsed = math.clamp(now - lastDt, 0, 0.05)
+        lastDt = now
+
+        --                         E
+    if _G.Unloaded then
+            pcall(function() rainRoot:Destroy() end)
+            pcall(function() splashRoot:Destroy() end)
+            pcall(function() lightningFolder:Destroy() end)
+            pcall(function() rainCC:Destroy() end)
+            pcall(function() rainBloom:Destroy() end)
+            applyRainLighting(false)
+            return
+        end
+
+        local enabled = config and config["Enable Rain"]
+        local intensity = math.clamp((config and config["Rain Intensity"] or 50) / 100, 0, 1)
+
+        if not enabled then
+            farEmitter.Enabled = false
+            midEmitter.Enabled = false
+            for _, s in ipairs(nearStreaks) do
+                s.beam.Enabled = false; s.active = false
+            end
+            applyRainLighting(false)
+            if rainSound.IsPlaying then rainSound:Stop() end
+            return
+        end
+
+        --          E                           
+        applyRainLighting(true)
+        if not rainSound.IsPlaying then rainSound:Play() end
+        rainSound.Volume = (rainSound.Volume * 0.93) + (0.85 * intensity * 0.07)
+
+        --                         E
+    local camPos = cam.CFrame.Position
+        farPart.Position = camPos + Vector3.new(0, 55, 0)
+        midPart.Position = camPos + Vector3.new(0, 40, 0)
+
+        -- Intensity                     
+        farEmitter.Rate = math.floor(900 + intensity * 800)
+        midEmitter.Rate = math.floor(250 + intensity * 220)
+        farEmitter.Enabled = true
+        midEmitter.Enabled = true
+
+        -- NearStreaks:                                  E
+    local streakInterval = 0.018 - intensity * 0.012  -- 0.018   E.006   E
+    if now - lastStreak > streakInterval then
+            lastStreak = now
+            fireStreak()
+    end
+        updateNearStreaks(elapsed)
+
+        --       E/      E                     E.4            E   E
+    if now - lastRaycast > 0.4 then
+            lastRaycast = now
+            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if root then
+                local rp = RaycastParams.new()
+                rp.FilterDescendantsInstances = {player.Character}
+                rp.FilterType = Enum.RaycastFilterType.Exclude
+                local rResult = workspace:Raycast(root.Position, Vector3.new(0, 100, 0), rp)
+                isIndoor = (rResult ~= nil)
+
+                --             E            E            E      E   E
+    if not isIndoor and now - lastSplash > (0.25 - intensity * 0.18) then
+                    lastSplash = now
+                    for i = 1, 3 do
+                        local ox = rand:NextNumber(-20, 20)
+                        local oz = rand:NextNumber(-20, 20)
+                        local sp = RaycastParams.new()
+                        sp.FilterDescendantsInstances = {player.Character}
+                        sp.FilterType = Enum.RaycastFilterType.Exclude
+                        local sResult = workspace:Raycast(
+                            root.Position + Vector3.new(ox, 30, oz),
+                            Vector3.new(0, -80, 0), sp
+                        )
+                        if sResult and sResult.Instance and sResult.Instance.CanCollide then
+                            emitSplash(sResult.Position + Vector3.new(0, 0.05, 0))
+                        end
+                    end
+                end
+            end
+        end
+
+        -- Lightning + Ambient Thunder Logic
+        if not isIndoor then
+            local lightningChance = math.floor(550 - intensity * 200)
+            if math.random(1, lightningChance) == 1 then
+                task.spawn(runLightning)
+            end
+
+            -- Ambient Thunder (Audio Only)
+            if now - lastAmbientThunder > rand:NextNumber(8, 25) then
+                lastAmbientThunder = now
+                if math.random(1, 2) == 1 then
+                    task.spawn(function()
+                        task.wait(rand:NextNumber(0.1, 4))
+                        if thunderSound and thunderSound.Parent then
+                            thunderSound.Volume = rand:NextNumber(0.4, 0.9)
+                            thunderSound.Pitch = rand:NextNumber(0.7, 0.9)
+                            thunderSound:Play()
+                        end
+                    end)
+                end
+            end
+        end
+    end))
+end)
+
+
+    -- ============================================================
+    --[[ BULLET TRACERS & IMPACT EFFECTS ]]
+    -- ============================================================
+    local TRACER_DEFAULTS = {
+        color0 = Color3.fromRGB(200, 100, 255),
+        color1 = Color3.fromRGB(120, 40, 200),
+        width0 = 0.08,
+        width1 = 0.04,
+        fadeTime = 0.35
+    }
+
+    local tracerPool = {}
+    local tracerCount = 0
+
+    local function createTracerBeam()
+        local part = Instance.new("Part", workspace.CurrentCamera)
+        part.Name = "KrazzTracerLine"
+        part.Anchored = true; part.CanCollide = false
+        part.Transparency = 1; part.Size = Vector3.new(0.05, 0.05, 0.05)
+        
+        local a0 = Instance.new("Attachment", part)
+        local a1 = Instance.new("Attachment", part)
+        local beam = Instance.new("Beam", part)
+        beam.Attachment0 = a0; beam.Attachment1 = a1
+        beam.FaceCamera = true
+        beam.LightEmission = 1; beam.LightInfluence = 0
+        beam.Enabled = false
+        
+        return {part = part, a0 = a0, a1 = a1, beam = beam, active = false}
+    end
+
+    local function acquireTracer()
+        for _, t in ipairs(tracerPool) do
+            if not t.active then
+                t.active = true
+                return t
+            end
+        end
+        local t = createTracerBeam()
+        t.active = true
+        table.insert(tracerPool, t)
+        return t
+    end
+
+
+    local function releaseTracer(t)
+        t.beam.Enabled = false
+        t.active = false
+    end
+
+    --[[ 
+        spawnBulletTracer(origin, hitPos, customOpts?)
+        - origin  : Vector3  (   E            )
+        - hitPos  : Vector3  (            nil=         E      E
+        - customOpts:    E   E      (         )
+          .color0, .color1, .width0, .width1, .fadeTime
+    ]]
+    local function spawnBulletTracer(origin, hitPos, customOpts)
+        if not (config and config["Enable Tracer"]) then return end
+        if not origin then return end
+
+        local opts = customOpts or {}
+        local c0 = opts.color0    or config["Tracer Color Start"] or TRACER_DEFAULTS.color0
+        local c1 = opts.color1    or config["Tracer Color End"]   or TRACER_DEFAULTS.color1
+        local w0 = opts.width0    or TRACER_DEFAULTS.width0
+        local w1 = opts.width1    or TRACER_DEFAULTS.width1
+        local ft = opts.fadeTime  or TRACER_DEFAULTS.fadeTime
+
+        --                         E         E         E         E      E40stud   E
+    local dest = hitPos or (origin + (camera.CFrame.LookVector * 240))
+
+        local tracer = acquireTracer()
+        local beam   = tracer.beam
+        local a0     = tracer.a0
+        local a1     = tracer.a1
+
+        a0.WorldPosition = origin
+        a1.WorldPosition = dest
+
+        beam.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, c0),
+            ColorSequenceKeypoint.new(1, c1),
+        })
+        beam.Width0 = w0
+        beam.Width1 = w1
+        beam.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.0),
+            NumberSequenceKeypoint.new(0.7, 0.2),
+            NumberSequenceKeypoint.new(1.0, 1.0),
+        })
+        beam.Enabled = true
+
+        task.spawn(function()
+    local t0 = os.clock()
+            while os.clock() - t0 < ft do
+                if _G.Unloaded then break end
+                local alpha = (os.clock() - t0) / ft
+                beam.Width0 = w0 * (1 - alpha)
+                beam.Width1 = w1 * (1 - alpha)
+                task.wait()
+            end
+            releaseTracer(tracer)
+        end)
+    end
+
+    --                                        E                              E   E    getgenv().KrazzSpawnBulletTracer = spawnBulletTracer
+
+    --[[ 
+                    E         E   Raycast      Hook   E        config["Enable Tracer"]   true            E            E        AvS2   FireBullet            E/ Tool.Activated + workspace:Raycast                      E    ]]
+    task.spawn(function()
+        -- Tool.Activated         E                           Tracer
+    local function hookTool(tool)
+            if not tool then return end
+            tool.Activated:Connect(function()
+                if not (config and config["Enable Tracer"]) then return end
+                task.spawn(function()
+                    task.wait(0.02) --       E                     E         E
+    local char = player.Character
+                    if not char then return end
+                    local hrp  = char:FindFirstChild("HumanoidRootPart")
+                    if not hrp then return end
+
+                    --    E               E                  Raycast                        E
+    local origin    = camera.CFrame.Position
+                    local direction = camera.CFrame.LookVector * 500
+                    local params    = RaycastParams.new()
+                    params.FilterDescendantsInstances = {char}
+                    params.FilterType = Enum.RaycastFilterType.Exclude
+
+                    local result = workspace:Raycast(origin, direction, params)
+                    local hitPos = result and result.Position or (origin + direction)
+
+                    spawnBulletTracer(origin, hitPos)
+
+                    --                               E                     E      E   E
+    if result and result.Instance then
+                        local hitPart = result.Instance
+                        --                   E      E                                 E
+    local hitChar = hitPart:FindFirstAncestorOfClass("Model")
+                        if hitChar then
+                            local hum = hitChar:FindFirstChildOfClass("Humanoid")
+                            if hum then
+                                --             E               E                  E                  E   E                                getgenv()._KrazzLastAimOrigin    = origin
+                                getgenv()._KrazzLastAimDirection = camera.CFrame.LookVector
+                            end
+                        end
+                        task.spawn(function()
+    local spark = Instance.new("Part")
+                            spark.Size = Vector3.new(0.1, 0.1, 0.1)
+                            spark.Anchored = true; spark.CanCollide = false
+                            spark.Transparency = 1
+                            spark.Position = hitPos
+                            spark.Parent = workspace.CurrentCamera
+                            local pe = Instance.new("ParticleEmitter", spark)
+                            pe.Color = ColorSequence.new(Color3.fromRGB(255, 200, 60))
+                            pe.LightEmission = 1; pe.LightInfluence = 0
+                            pe.Speed = NumberRange.new(8, 18)
+                            pe.Lifetime = NumberRange.new(0.05, 0.15)
+                            pe.Size = NumberSequence.new({
+                                NumberSequenceKeypoint.new(0, 0.12),
+                                NumberSequenceKeypoint.new(1, 0),
+                            })
+                            pe.SpreadAngle = Vector2.new(60, 60)
+                            pe:Emit(6)
+                            game:GetService("Debris"):AddItem(spark, 0.3)
+                        end)
+                    end
+                end)
+            end)
+        end
+
+        --                         E
+    if player.Character then
+            for _, ch in ipairs(player.Character:GetChildren()) do
+                if ch:IsA("Tool") then hookTool(ch) end
+            end
+        end
+        player.CharacterAdded:Connect(function(char)
+            char.ChildAdded:Connect(function(ch)
+                if ch:IsA("Tool") then hookTool(ch) end
+            end)
+        end)
+    end)
+end -- [End Bullet Tracer]
+
+
+-- ============================================================
+--[[ KRAZZ SKYBOX ENGINE: 4            E                     E   E         E            E]]
+-- 1. Night Sky (       +    )
+-- 2. Heavenly Light Rays (      E   E
+-- 3. Purple Galaxy Ocean (            )
+-- ============================================================
+do
+    local Lighting = game:GetService("Lighting")
+
+    --
+    local function clearKrazzEffects()
+        for _, v in ipairs(Lighting:GetChildren()) do
+            if v.Name:find("Krazz") or v.Name:find("KRAZZ") then
+                pcall(function() v:Destroy() end)
+            end
+        end
+        -- Atmosphere/Sky
+    for _, v in ipairs(Lighting:GetChildren()) do
+            if v:IsA("Sky") or v:IsA("Atmosphere") or v:IsA("ColorCorrectionEffect") or v:IsA("BloomEffect") or v:IsA("SunRaysEffect") or v:IsA("BlurEffect") then
+                -- KrazzRainCC     KrazzLightning
+    if v.Name ~= "KrazzRainCC" and v.Name ~= "KrazzLightning" and v.Name ~= "KrazzRainBloom" then
+                    pcall(function() v:Destroy() end)
+                end
+            end
+        end
+    end
+
+    -- --------------------------------------------------------
+    --             E      1: NIGHT SKY   E                     E   E    -- --------------------------------------------------------
+    getgenv().applySkyboxNight = function()
+        clearKrazzEffects()
+
+        -- Lighting
+        Lighting.Technology      = Enum.Technology.Future
+        Lighting.ClockTime       = 2           --       E   E        Lighting.Brightness      = 0.3
+        Lighting.GlobalShadows   = true
+        Lighting.Ambient         = Color3.fromRGB(20,  25,  55)   --                   
+        Lighting.OutdoorAmbient  = Color3.fromRGB(12,  18,  40)
+        Lighting.ExposureCompensation = -0.4
+
+        -- Skybox   E               E               ID            E   E
+    local sky = Instance.new("Sky", Lighting)
+        sky.Name = "KrazzNightSky"
+        --    E                                          E+                                  
+        sky.SkyboxBk = "rbxassetid://6951853007"
+        sky.SkyboxDn = "rbxassetid://6951853007"
+        sky.SkyboxFt = "rbxassetid://6951853007"
+        sky.SkyboxLf = "rbxassetid://6951853007"
+        sky.SkyboxRt = "rbxassetid://6951853007"
+        sky.SkyboxUp = "rbxassetid://6951853007"
+        sky.StarCount = 8000    --       E      E            E   E        sky.SunAngularSize = 0  --                
+        sky.MoonAngularSize = 8 --       E         E
+        -- Atmosphere
+    local atm = Instance.new("Atmosphere", Lighting)
+        atm.Name = "KrazzNightAtmosphere"
+        atm.Density = 0.12
+        atm.Offset  = -0.05
+        atm.Color   = Color3.fromRGB(30,  35,  80)
+        atm.Decay   = Color3.fromRGB(20,  25,  55)
+        atm.Haze    = 0.2
+        atm.Glare   = 0.02
+
+        -- ColorCorrection
+    local cc = Instance.new("ColorCorrectionEffect", Lighting)
+        cc.Name = "KrazzNightCC"
+        cc.Brightness  = -0.08
+        cc.Contrast    = 0.15
+        cc.Saturation  = -0.1
+        cc.TintColor   = Color3.fromRGB(200, 210, 255)  --       E            
+
+        -- Bloom   E                           E   E
+    local bloom = Instance.new("BloomEffect", Lighting)
+        bloom.Name       = "KrazzNightBloom"
+        bloom.Intensity  = 0.4
+        bloom.Size       = 14
+        bloom.Threshold  = 0.95  --          E            E         E
+        task.spawn(function()
+                    local folder = workspace.CurrentCamera:FindFirstChild("KrazzStarTwinkle") or Instance.new("Folder", workspace.CurrentCamera)
+            folder.Name = "KrazzStarTwinkle"
+            local part = Instance.new("Part", folder)
+            part.Anchored = true; part.CanCollide = false; part.Transparency = 1
+            part.Size = Vector3.new(1,1,1)
+            local pe = Instance.new("ParticleEmitter", part)
+            pe.Texture     = "rbxassetid://6659788798"  --                      
+            pe.Color       = ColorSequence.new(Color3.fromRGB(220, 230, 255))
+            pe.LightEmission = 1; pe.LightInfluence = 0
+            pe.Size        = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0),
+                NumberSequenceKeypoint.new(0.3, 0.06),
+                NumberSequenceKeypoint.new(1, 0),
+            })
+            pe.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 1),
+                NumberSequenceKeypoint.new(0.2, 0.3),
+                NumberSequenceKeypoint.new(0.8, 0.3),
+                NumberSequenceKeypoint.new(1, 1),
+            })
+            pe.Speed     = NumberRange.new(0, 0)
+            pe.Rate      = 3  --    E                        
+            pe.Lifetime  = NumberRange.new(2, 4)
+            pe.SpreadAngle = Vector2.new(180, 180)
+            pe.ZOffset   = -80  --                         
+
+            table.insert(connections, RunService.RenderStepped:Connect(function()
+                if _G.Unloaded or not part.Parent then return end
+                part.Position = camera.CFrame.Position
+            end)
+        end)
+    end
+
+    -- --------------------------------------------------------
+    --             E      2: HEAVENLY LIGHT RAYS   E         E      E    -- --------------------------------------------------------
+    getgenv().applySkyboxHeavenly = function()
+        clearKrazzEffects()
+
+        Lighting.Technology      = Enum.Technology.Future
+        Lighting.ClockTime       = 13          --             E        Lighting.Brightness      = 3.0
+        Lighting.GlobalShadows   = true
+        Lighting.Ambient         = Color3.fromRGB(140, 155, 180)
+        Lighting.OutdoorAmbient  = Color3.fromRGB(120, 135, 160)
+        Lighting.ExposureCompensation = 0.6
+
+        -- Skybox   E                              E   E
+    local sky = Instance.new("Sky", Lighting)
+        sky.Name           = "KrazzHeavenlySky"
+        sky.SkyboxBk       = "rbxassetid://159454286"
+        sky.SkyboxDn       = "rbxassetid://159454286"
+        sky.SkyboxFt       = "rbxassetid://159454286"
+        sky.SkyboxLf       = "rbxassetid://159454286"
+        sky.SkyboxRt       = "rbxassetid://159454286"
+        sky.SkyboxUp       = "rbxassetid://159454286"
+        sky.SunAngularSize = 12  --       E         
+        sky.StarCount      = 0
+
+        -- Atmosphere   E         E      E      E      Glare         E   E
+    local atm = Instance.new("Atmosphere", Lighting)
+        atm.Name    = "KrazzHeavenlyAtm"
+        atm.Density = 0.35
+        atm.Offset  = -0.1
+        atm.Color   = Color3.fromRGB(200, 215, 240)  --       E         
+        atm.Decay   = Color3.fromRGB(170, 185, 210)
+        atm.Haze    = 0.6
+        atm.Glare   = 0.85  --    EGlare               E         E   E
+        -- SunRays   E         E                     E
+    local sr = Instance.new("SunRaysEffect", Lighting)
+        sr.Name      = "KrazzSunRays"
+        sr.Intensity = 0.6   --       E        sr.Spread    = 0.7
+
+        -- Bloom
+    local bloom = Instance.new("BloomEffect", Lighting)
+        bloom.Name      = "KrazzHeavenlyBloom"
+        bloom.Intensity = 2.0
+        bloom.Size      = 48
+        bloom.Threshold = 0.5
+
+        -- ColorCorrection
+    local cc = Instance.new("ColorCorrectionEffect", Lighting)
+        cc.Name       = "KrazzHeavenlyCC"
+        cc.Brightness = 0.12
+        cc.Contrast   = 0.2
+        cc.Saturation = -0.15
+        cc.TintColor  = Color3.fromRGB(240, 245, 255)
+
+        task.spawn(function()
+                    local shaftFolder = workspace.CurrentCamera:FindFirstChild("KrazzLightShafts") or Instance.new("Folder", workspace.CurrentCamera)
+            shaftFolder.Name = "KrazzLightShafts"
+
+            for i = 1, 5 do
+                task.wait(0.05)
+                local shaftPart = Instance.new("Part", shaftFolder)
+                shaftPart.Anchored = true; shaftPart.CanCollide = false
+                shaftPart.Transparency = 1; shaftPart.Size = Vector3.new(0.1, 0.1, 0.1)
+                local a0 = Instance.new("Attachment", shaftPart)
+                local a1 = Instance.new("Attachment", shaftPart)
+                local shaftBeam = Instance.new("Beam", shaftPart)
+                shaftBeam.Attachment0 = a0
+                shaftBeam.Attachment1 = a1
+                shaftBeam.FaceCamera  = true
+                shaftBeam.LightEmission   = 1
+                shaftBeam.LightInfluence  = 0
+                shaftBeam.Color           = ColorSequence.new(Color3.fromRGB(255, 250, 230))
+                shaftBeam.Width0          = math.random(8, 20) + math.random() * 5
+                shaftBeam.Width1          = 0
+                shaftBeam.Transparency    = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 0.7),
+                    NumberSequenceKeypoint.new(0.5, 0.85),
+                    NumberSequenceKeypoint.new(1, 1),
+                })
+                shaftBeam.Segments   = 4
+                shaftBeam.CurveSize0 = math.random(-3, 3) * 0.5
+                shaftBeam.CurveSize1 = math.random(-3, 3) * 0.5
+
+                local offsetX = math.random(-60, 60)
+                local offsetZ = math.random(-60, 60)
+                local topY    = 180
+                local botY    = -40
+
+                table.insert(connections, RunService.RenderStepped:Connect(function()
+                    if _G.Unloaded or not shaftPart.Parent then return end
+                    local base = camera.CFrame.Position
+                    a0.WorldPosition = Vector3.new(base.X + offsetX, topY, base.Z + offsetZ)
+                    a1.WorldPosition = Vector3.new(base.X + offsetX + math.sin(os.clock() * 0.3) * 5, botY, base.Z + offsetZ)
+                end))
+            end
+        end)
+    end
+
+    -- --------------------------------------------------------
+    --             E      3: PURPLE GALAXY OCEAN   E                              E   E    -- --------------------------------------------------------
+    getgenv().applySkyboxPurpleGalaxy = function()
+        clearKrazzEffects()
+
+        Lighting.Technology      = Enum.Technology.Future
+        Lighting.ClockTime       = 1
+        Lighting.Brightness      = 1.5
+        Lighting.GlobalShadows   = true
+        Lighting.Ambient         = Color3.fromRGB(60,  15,  90)   --    E         
+        Lighting.OutdoorAmbient  = Color3.fromRGB(40,  10,  70)
+        Lighting.ExposureCompensation = 0.2
+
+        -- Skybox   E                           E   E
+    local sky = Instance.new("Sky", Lighting)
+        sky.Name           = "KrazzGalaxySky"
+        sky.SkyboxBk       = "rbxassetid://6444320592"
+        sky.SkyboxDn       = "rbxassetid://6444320592"
+        sky.SkyboxFt       = "rbxassetid://6444320592"
+        sky.SkyboxLf       = "rbxassetid://6444320592"
+        sky.SkyboxRt       = "rbxassetid://6444320592"
+        sky.SkyboxUp       = "rbxassetid://6444320592"
+        sky.StarCount      = 12000
+        sky.SunAngularSize = 0
+        sky.MoonAngularSize = 5
+
+        -- Atmosphere
+    local atm = Instance.new("Atmosphere", Lighting)
+        atm.Name    = "KrazzGalaxyAtm"
+        atm.Density = 0.28
+        atm.Offset  = 0
+        atm.Color   = Color3.fromRGB(90,  30, 140)  --    
+        atm.Decay   = Color3.fromRGB(60,  15, 100)
+        atm.Haze    = 0.45
+        atm.Glare   = 0.15
+
+        -- Bloom   E                           E   E
+    local bloom = Instance.new("BloomEffect", Lighting)
+        bloom.Name      = "KrazzGalaxyBloom"
+        bloom.Intensity = 1.4
+        bloom.Size      = 36
+        bloom.Threshold = 0.55
+
+        -- ColorCorrection   E         E               E
+    local cc = Instance.new("ColorCorrectionEffect", Lighting)
+        cc.Name       = "KrazzGalaxyCC"
+        cc.Brightness = 0.05
+        cc.Contrast   = 0.25
+        cc.Saturation = 0.3
+        cc.TintColor  = Color3.fromRGB(200, 100, 255)
+
+        task.spawn(function()
+            --          E   Parts
+    local oceanFolder = workspace:FindFirstChild("KrazzGalaxyOcean")
+            if oceanFolder then oceanFolder:Destroy() end
+            oceanFolder = Instance.new("Folder", workspace)
+            oceanFolder.Name = "KrazzGalaxyOcean"
+
+            local OCEAN_SIZE = 600
+            local TILE_SIZE  = 60
+            local tiles = {}
+
+            --                E                  E
+    for x = -OCEAN_SIZE/2, OCEAN_SIZE/2 - TILE_SIZE, TILE_SIZE do
+                for z = -OCEAN_SIZE/2, OCEAN_SIZE/2 - TILE_SIZE, TILE_SIZE do
+                    local tile = Instance.new("Part", oceanFolder)
+                    tile.Size = Vector3.new(TILE_SIZE, 0.5, TILE_SIZE)
+                    tile.Position = Vector3.new(x + TILE_SIZE/2, 0, z + TILE_SIZE/2)
+                    tile.Anchored = true; tile.CanCollide = false
+                    tile.Material = Enum.Material.Neon
+                    tile.Color = Color3.fromRGB(30, 5, 55)  --       E         E                    tile.Reflectance = 0.6
+                    tile.CastShadow = false
+                    pcall(function()
+    local sa = Instance.new("SurfaceAppearance", tile)
+                        sa.Roughness = 0.05  --                      E                        sa.Metalness = 0.0
+    end)
+                    --          E
+    local edgeEmit = Instance.new("ParticleEmitter", tile)
+                    edgeEmit.Color = ColorSequence.new({
+                        ColorSequenceKeypoint.new(0, Color3.fromRGB(180, 60, 255)),
+                        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 100, 255)),
+                        ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 50, 200)),
+                    })
+                    edgeEmit.LightEmission   = 1
+                    edgeEmit.LightInfluence  = 0
+                    edgeEmit.Speed           = NumberRange.new(1, 4)
+                    edgeEmit.Lifetime        = NumberRange.new(1.2, 2.5)
+                    edgeEmit.Rate            = 0.8
+                    edgeEmit.Size            = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 0),
+                        NumberSequenceKeypoint.new(0.3, 0.25),
+                        NumberSequenceKeypoint.new(1, 0),
+                    })
+                    edgeEmit.Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 1),
+                        NumberSequenceKeypoint.new(0.2, 0.2),
+                        NumberSequenceKeypoint.new(0.8, 0.4),
+                        NumberSequenceKeypoint.new(1, 1),
+                    })
+                    edgeEmit.SpreadAngle = Vector2.new(10, 10)
+                    edgeEmit.RotSpeed = NumberRange.new(-45, 45)
+                    table.insert(tiles, tile)
+                end
+            end
+
+            -- Gerstner                           E                                    E   E
+    local waveParams = {
+                { amplitude = 1.2, frequency = 0.8, speed = 1.2, dirX = 1,    dirZ = 0.3 },
+                { amplitude = 0.7, frequency = 1.4, speed = 1.8, dirX = -0.4, dirZ = 1   },
+                { amplitude = 0.4, frequency = 2.1, speed = 2.4, dirX = 0.6,  dirZ = -0.7},
+            }
+            local function gerstnerWave(pos, t)
+                local y = 0
+                for _, w in ipairs(waveParams) do
+                    local dot = (pos.X * w.dirX + pos.Z * w.dirZ) * w.frequency
+                    y = y + w.amplitude * math.sin(dot + t * w.speed)
+                end
+                return y
+            end
+
+            --                                  E                        E
+    local lastWaveUpdate = 0
+            table.insert(connections, RunService.RenderStepped:Connect(function()
+                if _G.Unloaded then
+                    pcall(function() oceanFolder:Destroy() end)
+                    return
+                end
+                local t = os.clock()
+                -- 30fps               E                           E   E   E   E
+    if t - lastWaveUpdate < 0.033 then return end
+                lastWaveUpdate = t
+
+                local camPos = camera.CFrame.Position
+                for _, tile in ipairs(tiles) do
+                    if not tile.Parent then continue end
+                    local dist = (tile.Position - camPos).Magnitude
+                    --                      E                        E   E   E                           E   E
+    if dist > 400 then continue end
+                    local wx = tile.Position.X
+                    local wz = tile.Position.Z
+                    local wy = gerstnerWave(Vector3.new(wx, 0, wz), t)
+                    tile.Position = Vector3.new(wx, wy, wz)
+                    --
+    local normalizedY = (wy + 2) / 4  -- 0   E
+                    tile.Color = Color3.fromRGB(
+                        math.floor(20 + normalizedY * 30),
+                        math.floor(3  + normalizedY * 5),
+                        math.floor(50 + normalizedY * 60)
+                    )
+                end
+            end))
+
+            task.spawn(function()
+    while not _G.Unloaded do
+                    task.wait(0.15)
+                    --                                        E
+    local rTile = tiles[math.random(1, #tiles)]
+                    if rTile and rTile.Parent then
+                        local spark = Instance.new("Part", oceanFolder)
+                        spark.Anchored = true; spark.CanCollide = false
+                        spark.Transparency = 1; spark.Size = Vector3.new(0.1,0.1,0.1)
+                        spark.Position = rTile.Position + Vector3.new(
+                            math.random(-TILE_SIZE/2, TILE_SIZE/2), 0.3,
+                            math.random(-TILE_SIZE/2, TILE_SIZE/2)
+                        )
+                        local spe = Instance.new("ParticleEmitter", spark)
+                        spe.Color = ColorSequence.new(Color3.fromRGB(255, 150, 255))
+                        spe.LightEmission = 1; spe.LightInfluence = 0
+                        spe.Speed = NumberRange.new(0.5, 2)
+                        spe.Lifetime = NumberRange.new(0.4, 0.8)
+                        spe.Size = NumberSequence.new({
+                            NumberSequenceKeypoint.new(0, 0.12),
+                            NumberSequenceKeypoint.new(1, 0),
+                        })
+                        spe.Rate = 0
+                        spe:Emit(3)
+                        game:GetService("Debris"):AddItem(spark, 1)
+                    end
+                end
+            end)
+        end)
+    end
+
+    local _origApplySkybox = applySkybox
+    getgenv().applySkybox = function(mode)
+        if mode == "Night Sky"      then return getgenv().applySkyboxNight()
+        elseif mode == "Heavenly"   then return getgenv().applySkyboxHeavenly()
+        elseif mode == "Purple Galaxy Ocean" then return getgenv().applySkyboxPurpleGalaxy()
+        elseif _origApplySkybox    then return _origApplySkybox(mode)
+        end
+    end
+    --
+    if addSkyOpt then
+        addSkyOpt("Night Sky",           function() getgenv().applySkyboxNight() end)
+        addSkyOpt("Heavenly",            function() getgenv().applySkyboxHeavenly() end)
+        addSkyOpt("Purple Galaxy Ocean", function() getgenv().applySkyboxPurpleGalaxy() end)
+    end
+end -- [End Skybox Engine]
+
+-- end-- ============================================================
+--[[ KRAZZ ATMOSPHERIC ENGINE: RAIN, LIGHTNING & SKYBOX ]]
+-- ============================================================
+task.spawn(function()
+    local Lit = game:GetService('Lighting')
+    local RunService = game:GetService('RunService')
+    local TweenService = game:GetService('TweenService')
+    local Debris = game:GetService('Debris')
+    local Players = game:GetService('Players')
+    
+    local player = Players.LocalPlayer
+    local cam = workspace.CurrentCamera
+    local rand = Random.new()
+    
+-- if missing)
+    if typeof(config) ~= 'table' then getgenv().config = {} end
+
+    -- ============================================================
+    --[[ 1. SKYBOX & LIGHTING TOGGLE SYSTEM ]]
+    -- ============================================================
+    local safeModesNoSkyTouch = { ['Daylight'] = true, ['Bright sky'] = true, ['Default'] = true }
+    
+    getgenv().applySkybox = function(mode)
+--         if in safe modes
+    if not safeModesNoSkyTouch[mode] then
+            for _, v in ipairs(Lit:GetChildren()) do
+                if v:IsA('Sky') then pcall(function() v:Destroy() end) end
+            end
+        end
+        -- Always refresh Krazz instances
+    for _, v in ipairs(Lit:GetChildren()) do
+            if v.Name:match('^Krazz') and not v:IsA('Sky') then pcall(function() v:Destroy() end) end
+        end
+
+        if mode == 'Default' then
+            Lit.ClockTime = 14; Lit.Brightness = 2
+            Lit.Ambient = Color3.fromRGB(0,0,0); Lit.OutdoorAmbient = Color3.fromRGB(127,127,127)
+            Lit.ExposureCompensation = 0; Lit.GlobalShadows = true
+            
+        elseif mode == 'Daylight' then
+            -- ! DO NOT TOUCH SKY !
+            Lit.ClockTime = 12; Lit.Brightness = 2; Lit.ExposureCompensation = 0.2
+            Lit.Ambient = Color3.fromRGB(100, 120, 150); Lit.OutdoorAmbient = Color3.fromRGB(130, 155, 185)
+            
+        elseif mode == 'Bright sky' then
+            -- ! DO NOT TOUCH SKY !
+            Lit.ClockTime = 14; Lit.Brightness = 3; Lit.ExposureCompensation = 0.5
+            Lit.Ambient = Color3.fromRGB(130, 160, 200); Lit.OutdoorAmbient = Color3.fromRGB(165, 195, 235)
+            
+        elseif mode == 'Clear Sky' then
+            Lit.ClockTime = 13; Lit.Brightness = 2.5; Lit.ExposureCompensation = 0.1
+            Lit.Ambient = Color3.fromRGB(80,120,180); Lit.OutdoorAmbient = Color3.fromRGB(100,150,210)
+            local atm = Instance.new('Atmosphere', Lit); atm.Name = 'KrazzAtmosphere'
+            atm.Density = 0.08; atm.Color = Color3.fromRGB(160,200,255)
+            
+        elseif mode == 'Purple sunse' then
+            Lit.Technology = Enum.Technology.Future
+            Lit.ClockTime = 1; Lit.Brightness = 1.0; Lit.ExposureCompensation = 0.15
+            Lit.Ambient = Color3.fromRGB(55, 10, 90); Lit.OutdoorAmbient = Color3.fromRGB(40, 5, 75)
+            local atm = Instance.new('Atmosphere', Lit); atm.Name = 'KrazzAtmosphere'
+            atm.Density = 0.55; atm.Color = Color3.fromRGB(85, 15, 140); atm.Decay = Color3.fromRGB(55, 5, 105)
+            atm.Haze = 0.5; atm.Glare = 0.06
+            local sky = Instance.new('Sky', Lit); sky.Name = 'KrazzPurpleGalaxySky'
+            sky.StarCount = 14000; sky.MoonAngularSize = 4
+            sky.SkyboxBk = 'rbxassetid://6444320592'; sky.SkyboxDn = 'rbxassetid://6444320592'
+            sky.SkyboxFt = 'rbxassetid://6444320592'; sky.SkyboxLf = 'rbxassetid://6444320592'
+            sky.SkyboxRt = 'rbxassetid://6444320592'; sky.SkyboxUp = 'rbxassetid://6444320592'
+            
+        elseif mode == 'Blood Sky' then
+            Lit.ClockTime = 18.5; Lit.Brightness = 0.8; Lit.ExposureCompensation = 0.25
+            Lit.Ambient = Color3.fromRGB(110, 0, 0); Lit.OutdoorAmbient = Color3.fromRGB(140, 0, 0)
+            local atm = Instance.new('Atmosphere', Lit); atm.Name = 'KrazzAtmosphere'
+            atm.Density = 0.65; atm.Color = Color3.fromRGB(220, 25, 25); atm.Decay = Color3.fromRGB(160, 8, 8)
+            atm.Haze = 0.95; atm.Glare = 0.4
+            local sky = Instance.new('Sky', Lit); sky.Name = 'KrazzBloodSky'
+            sky.SkyboxBk = 'rbxassetid://6401188805'; sky.SkyboxDn = 'rbxassetid://6401188805'
+            sky.SkyboxFt = 'rbxassetid://6401188805'; sky.SkyboxLf = 'rbxassetid://6401188805'
+            sky.SkyboxRt = 'rbxassetid://6401188805'; sky.SkyboxUp = 'rbxassetid://6401188805'
+        end
+    end
+
+    -- ============================================================
+    --[[ 2. CINEMATIC MULTI-LAYER RAIN & LIGHTNING ENGINE ]]
+    -- ============================================================
+    local rainRoot = Instance.new('Folder'); rainRoot.Name = 'KrazzRain'; rainRoot.Parent = cam
+    local splashRoot = Instance.new('Folder'); splashRoot.Name = 'KrazzSplash'; splashRoot.Parent = workspace
+    local lightningFolder = Instance.new('Folder'); lightningFolder.Name = 'KrazzLightning'; lightningFolder.Parent = workspace
+
+    local rainSound = Instance.new('Sound', rainRoot)
+    rainSound.SoundId = 'rbxassetid://9112793880'; rainSound.Looped = true; rainSound.Volume = 0
+
+    local thunderSound = Instance.new('Sound', game:GetService('SoundService') or workspace)
+    thunderSound.SoundId = 'rbxassetid://231917744'; thunderSound.Volume = 2
+
+    -- FAR RAIN (Low visibility, high rate)
+    local farPart = Instance.new('Part', rainRoot)
+    farPart.Anchored = true; farPart.CanCollide = false; farPart.Transparency = 1; farPart.Size = Vector3.new(1,1,1)
+    local farEmitter = Instance.new('ParticleEmitter', farPart)
+    farEmitter.Texture = 'rbxassetid://6101261905'; farEmitter.LightEmission = 0.08
+    farEmitter.Color = ColorSequence.new(Color3.fromRGB(160, 175, 200))
+    farEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.75), NumberSequenceKeypoint.new(0.6, 0.6), NumberSequenceKeypoint.new(1, 1)})
+    farEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.03), NumberSequenceKeypoint.new(1, 0.015)})
+    farEmitter.Lifetime = NumberRange.new(0.35, 0.55); farEmitter.Rate = 1500; farEmitter.Speed = NumberRange.new(90, 130)
+    farEmitter.Acceleration = Vector3.new(2.5, -200, 0.8) -- Wind tilt
+    farEmitter.Orientation = Enum.ParticleOrientation.VelocityParallel; farEmitter.ZOffset = -12; farEmitter.Enabled = false
+
+    -- MID RAIN
+    local midPart = Instance.new('Part', rainRoot)
+    midPart.Anchored = true; midPart.CanCollide = false; midPart.Transparency = 1; midPart.Size = Vector3.new(1,1,1)
+    local midEmitter = Instance.new('ParticleEmitter', midPart)
+    midEmitter.Texture = 'rbxassetid://6101261905'; midEmitter.LightEmission = 0.12
+    midEmitter.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.45), NumberSequenceKeypoint.new(0.5, 0.35), NumberSequenceKeypoint.new(1, 1)})
+    midEmitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.06), NumberSequenceKeypoint.new(1, 0.025)})
+    midEmitter.Lifetime = NumberRange.new(0.22, 0.38); midEmitter.Rate = 400; midEmitter.Speed = NumberRange.new(120, 165)
+    midEmitter.Acceleration = Vector3.new(3, -260, 1) -- Wind tilt
+    midEmitter.Orientation = Enum.ParticleOrientation.VelocityParallel; midEmitter.ZOffset = -2; midEmitter.Enabled = false
+
+    -- NEAR RAIN (Trail/Beam based streaks)
+    local nearStreaks = {}
+    local nearFolder = Instance.new('Folder', rainRoot); nearFolder.Name = 'NearStreaks'
+    for i = 1, 30 do
+        local p = Instance.new('Part', nearFolder); p.Anchored = true; p.CanCollide = false; p.Transparency = 1; p.Size = Vector3.new(0.1,0.1,0.1)
+        local a0 = Instance.new('Attachment', p); local a1 = Instance.new('Attachment', p)
+        local beam = Instance.new('Beam', p); beam.Attachment0 = a0; beam.Attachment1 = a1; beam.FaceCamera = true
+        beam.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(0.1, 0.25), NumberSequenceKeypoint.new(1, 1)})
+        beam.Enabled = false
+        table.insert(nearStreaks, {part = p, a0 = a0, a1 = a1, beam = beam, active = false, t = 0})
+    end
+
+    -- SPLASH POOL
+    local splashPool = {}
+    for i = 1, 10 do
+        local p = Instance.new('Part', splashRoot); p.Anchored = true; p.CanCollide = false; p.Transparency = 1; p.Size = Vector3.new(0.1,0.1,0.1)
+        local pe = Instance.new('ParticleEmitter', p); pe.Texture = 'rbxassetid://4834067'
+        pe.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.4), NumberSequenceKeypoint.new(1, 1)}); pe.LightEmission = 0.1
+        pe.Size = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.1), NumberSequenceKeypoint.new(0.6, 0.3), NumberSequenceKeypoint.new(1, 0)})
+        pe.Lifetime = NumberRange.new(0.12, 0.22); pe.Rate = 0; pe.Speed = NumberRange.new(2, 7)
+        pe.SpreadAngle = Vector2.new(60, 60); pe.RotSpeed = NumberRange.new(-30, 30)
+        table.insert(splashPool, {part = p, emitter = pe, free = true})
+    end
+
+    local function emitSplash(pos)
+        for _, s in ipairs(splashPool) do
+            if s.free then
+                s.free = false; s.part.Position = pos; s.emitter:Emit(rand:NextInteger(2, 5))
+                task.delay(0.35, function() s.free = true end); break
+            end
+        end
+    end
+
+    -- LOCALIZED LIGHTNING
+    local function createLightningBolt(startPos, endPos)
+        local segCount = math.random(6, 10); local prevPos = startPos
+        local parts = {}
+        for i = 1, segCount do
+            local frac = i / segCount; local lerped = startPos:Lerp(endPos, frac)
+            local jitter = (1 - frac) * 6
+            local nextPos = lerped + Vector3.new(rand:NextNumber(-jitter, jitter), 0, rand:NextNumber(-jitter, jitter))
+            local seg = Instance.new('Part', lightningFolder)
+            seg.Anchored = true; seg.CanCollide = false; seg.Material = Enum.Material.Neon; seg.Color = Color3.fromRGB(200, 220, 255)
+            seg.Size = Vector3.new(0.1, 0.1, (nextPos - prevPos).Magnitude); seg.CFrame = CFrame.new((prevPos + nextPos) * 0.5, nextPos)
+            table.insert(parts, seg); prevPos = nextPos
+        end
+        task.delay(0.15, function() for _, p in ipairs(parts) do p:Destroy() end end)
+    end
+
+    local function strikeLightning()
+        local camPos = cam.CFrame.Position
+        local dist = rand:NextNumber(80, 250); local angle = rand:NextNumber(0, math.pi * 2)
+        local strikeX = camPos.X + math.cos(angle) * dist; local strikeZ = camPos.Z + math.sin(angle) * dist
+        local startPos = Vector3.new(strikeX, 160, strikeZ); local endPos = Vector3.new(strikeX, rand:NextNumber(20, 60), strikeZ)
+        
+        createLightningBolt(startPos, endPos)
+
+        local boltLight = Instance.new('Part', lightningFolder); boltLight.Anchored = true; boltLight.CanCollide = false; boltLight.Transparency = 1
+        boltLight.Position = startPos
+        local light = Instance.new('PointLight', boltLight); light.Color = Color3.fromRGB(180, 200, 255); light.Range = 80; light.Brightness = 0
+        light.Enabled = true
+
+        task.spawn(function()
+            for k = 1, rand:NextInteger(2, 4) do
+                light.Brightness = (5 - k); task.wait(0.06); light.Brightness = 0; task.wait(0.04)
+            end
+            boltLight:Destroy()
+        end)
+        
+        pcall(function()
+            local atm = Lit:FindFirstChildOfClass('Atmosphere')
+            if atm then
+                local orig = atm.Glare; atm.Glare = math.min(orig + 0.15, 1)
+                task.delay(0.15, function() TweenService:Create(atm, TweenInfo.new(0.3), {Glare = orig}):Play() end)
+            end
+        end)
+        
+        task.delay(dist / 343, function() if thunderSound and thunderSound.Parent then thunderSound:Play() end end)
+    end
+
+    local lastStreak, lastSplash = 0, 0
+    RunService.RenderStepped:Connect(function(dt)
+        local enabled = config and config['Enable Rain']
+        local intensity = math.clamp((config and config['Rain Intensity'] or 50) / 100, 0, 1)
+
+        if not enabled then
+            farEmitter.Enabled = false; midEmitter.Enabled = false
+            for _, s in ipairs(nearStreaks) do s.beam.Enabled = false; s.active = false end
+            if rainSound.IsPlaying then rainSound:Stop() end
+            return
+        end
+
+        farPart.Position = cam.CFrame.Position + Vector3.new(0, 55, 0)
+        midPart.Position = cam.CFrame.Position + Vector3.new(0, 40, 0)
+        farEmitter.Rate = 900 + intensity * 600; midEmitter.Rate = 250 + intensity * 200
+        farEmitter.Enabled = true; midEmitter.Enabled = true
+        if not rainSound.IsPlaying then rainSound:Play() end
+        rainSound.Volume = math.min(0.85 * intensity, rainSound.Volume + 0.05)
+
+        local now = os.clock()
+        if now - lastStreak > (0.018 - intensity * 0.01) then
+            lastStreak = now
+            for _, s in ipairs(nearStreaks) do
+                if not s.active then
+                    s.active = true; s.t = 0; s.duration = rand:NextNumber(0.15, 0.25); s.speed = rand:NextNumber(35, 60)
+                    local spX, spZ = rand:NextNumber(-15, 15), rand:NextNumber(-15, 15)
+                    local origin = cam.CFrame.Position + Vector3.new(spX, rand:NextNumber(15, 30), spZ)
+                    s.startPos = origin; s.endPos = origin + Vector3.new(0.05, -1, 0.02).Unit * rand:NextNumber(2.5, 5)
+                    s.beam.Width0 = rand:NextNumber(0.016, 0.04); s.beam.Width1 = s.beam.Width0 / 2
+                    s.beam.Enabled = true; break
+                end
+            end
+        end
+
+        for _, s in ipairs(nearStreaks) do
+            if s.active then
+                s.t = s.t + dt
+                if s.t >= s.duration then s.beam.Enabled = false; s.active = false else
+                    local drop = Vector3.new(0, -s.speed * s.t, 0)
+                    local wp0, wp1 = s.startPos + drop, s.endPos + drop
+                    s.a0.WorldPosition, s.a1.WorldPosition = wp0, wp1
+                    s.part.Position = (wp0 + wp1) * 0.5
+                end
+            end
+        end
+
+        local root = player.Character and player.Character:FindFirstChild('HumanoidRootPart')
+        if root then
+            local rParams = RaycastParams.new(); rParams.FilterDescendantsInstances = {player.Character}
+            local roofRay = workspace:Raycast(root.Position, Vector3.new(0, 100, 0), rParams)
+            if not roofRay then
+                if now - lastSplash > (0.25 - intensity * 0.15) then
+                    lastSplash = now
+                    for i=1,3 do
+                        local grRay = workspace:Raycast(root.Position + Vector3.new(rand:NextNumber(-20, 20), 30, rand:NextNumber(-20, 20)), Vector3.new(0, -80, 0), rParams)
+                        if grRay then emitSplash(grRay.Position + Vector3.new(0, 0.05, 0)) end
+                    end
+                end
+                if math.random(1, math.floor(500 - intensity * 150)) == 1 then task.spawn(strikeLightning) end
+            end
+        end
+    end)
+end)
+-- ============================================================
+--[[ KRAZZ COMBAT: ADVANCED BULLET TRACERS ]]
+-- ============================================================
+local TweenService = game:GetService("TweenService")
+local workspace = game:GetService("Workspace")
+
+getgenv().createBulletTracer = function(origin, targetPos)
+    local distance = (targetPos - origin).Magnitude
+    local tracerPart = Instance.new("Part")
+    tracerPart.Name = "KrazzTracer"
+    tracerPart.Anchored = true
+    tracerPart.CanCollide = false
+    tracerPart.Material = Enum.Material.Neon
+    tracerPart.Color = Color3.fromRGB(255, 255, 200)
+    tracerPart.Size = Vector3.new(0.05, 0.05, distance)
+    tracerPart.CFrame = CFrame.new(origin, targetPos) * CFrame.new(0, 0, -distance / 2)
+    tracerPart.Parent = workspace.Camera
+    
+    -- Beam effect
+    local a0 = Instance.new("Attachment", tracerPart)
+    a0.Position = Vector3.new(0,0,distance/2)
+    local a1 = Instance.new("Attachment", tracerPart)
+    a1.Position = Vector3.new(0,0,-distance/2)
+    local beam = Instance.new("Beam", tracerPart)
+    beam.Attachment0 = a0; beam.Attachment1 = a1
+    beam.FaceCamera = true; beam.LightEmission = 1
+    beam.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+    beam.Width0 = 0.08; beam.Width1 = 0.02
+    
+    local tween = TweenService:Create(tracerPart, TweenInfo.new(0.4, Enum.EasingStyle.Cubic, Enum.EasingDirection.Out), {
+        Size = Vector3.new(0,0, distance),
+        Transparency = 1
+    })
+    tween:Play()
+    tween.Completed:Connect(function() tracerPart:Destroy() end)
+end
+
+-- for exploiting)
+local oldNamecall
+oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    local args = {...}
+    if method == "Raycast" and self == workspace and typeof(args[1]) == "Vector3" and typeof(args[2]) == "Vector3" then
+        local origin, dir = args[1], args[2]
+        if dir.Magnitude > 2 and (config and config["Enable Tracers"]) then
+            task.spawn(function()
+                local RaycastResult = oldNamecall(self, unpack(args))
+                local hitPos = RaycastResult and RaycastResult.Position or (origin + dir)
+                createBulletTracer(origin, hitPos)
+            end)
+        end
+    end
+    return oldNamecall(self, ...)
+end)
+
+-- [ End of Script ]
